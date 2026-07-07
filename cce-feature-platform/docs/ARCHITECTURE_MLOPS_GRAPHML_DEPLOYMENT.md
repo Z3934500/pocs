@@ -184,6 +184,6 @@ kubectl apply -n cce-platform -f deploy/k8s/mlops-monitor-cronjob.yaml
 | Databricks | job duration, Silver rejects, Gold row counts |
 | MLOps | AUC, precision@20, model version, drift severity |
 
-## Interview Talk Track
+## Design Narrative
 
-> I split the platform into offline and online responsibilities. Databricks computes governed customer and policy features, records model runs in MLflow and monitors feature drift. EKS and Redis serve the low-latency online feature API, so campaign tools do not query the warehouse or transactional RDS at request time. Identity resolution starts with deterministic NRIC/FIN/Passport matching, then graph-style similarity candidates catch missing-ID cases for manual review or controlled merge.
+The platform is split into offline and online responsibilities. Databricks computes governed customer and policy features, records model runs in MLflow and monitors feature drift. EKS and Redis serve the low-latency online feature API, so campaign tools do not query the warehouse or transactional RDS at request time. Identity resolution starts with deterministic NRIC/FIN/Passport matching, then graph-style similarity candidates catch missing-ID cases for manual review or controlled merge.

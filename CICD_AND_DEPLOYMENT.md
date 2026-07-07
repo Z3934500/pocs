@@ -15,7 +15,7 @@ What it does for each PoC:
 3. Runs unit tests.
 4. Builds the Docker image.
 
-This is enough for an interview-grade CI pipeline because it proves the data pipeline code and the deployable container both work.
+This is enough for a lightweight CI baseline because it proves the data pipeline code and the deployable container both work.
 
 ## Local Development
 
@@ -73,9 +73,9 @@ pocs/oee-data-platform/deploy/k8s/deployment.yaml
 Then deploy:
 
 ```powershell
-kubectl create namespace interview-pocs
-kubectl apply -n interview-pocs -f pocs/cce-feature-platform/deploy/k8s
-kubectl apply -n interview-pocs -f pocs/oee-data-platform/deploy/k8s
+kubectl create namespace data-platform-pocs
+kubectl apply -n data-platform-pocs -f pocs/cce-feature-platform/deploy/k8s
+kubectl apply -n data-platform-pocs -f pocs/oee-data-platform/deploy/k8s
 ```
 
 ## Production Upgrade Path
@@ -91,8 +91,6 @@ For a real company implementation, the natural upgrade path is:
 | Docker Compose | EKS, AKS, ECS or Azure App Service |
 | GitHub Actions build | CI pipeline with image scanning and deployment approval |
 
-## Interview Framing
+## Scope Statement
 
-Say this clearly:
-
-> These PoCs are not meant to pretend I built a massive production platform alone. They are compact, runnable demonstrations of how I would design and deliver the same kind of platform end to end: ingestion, data modeling, ETL, API, dashboard, tests, containerization and CI/CD.
+These PoCs are compact, runnable demonstrations of end-to-end platform design. They cover ingestion, data modeling, ETL, API, dashboard, tests, containerization and CI/CD while keeping infrastructure and data volume intentionally small enough to run locally.

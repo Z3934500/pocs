@@ -11,13 +11,13 @@ Open `http://127.0.0.1:8010`.
 ## Kubernetes
 
 ```powershell
-kubectl create namespace interview-pocs
-kubectl apply -n interview-pocs -f deploy/k8s/deployment.yaml
-kubectl apply -n interview-pocs -f deploy/k8s/service.yaml
-kubectl apply -n interview-pocs -f deploy/k8s/hpa.yaml
-kubectl apply -n interview-pocs -f deploy/k8s/stream-statefulset.yaml
-kubectl apply -n interview-pocs -f deploy/k8s/batch-importer-cronjob.yaml
-kubectl apply -n interview-pocs -f deploy/k8s/mlops-monitor-cronjob.yaml
+kubectl create namespace data-platform-pocs
+kubectl apply -n data-platform-pocs -f deploy/k8s/deployment.yaml
+kubectl apply -n data-platform-pocs -f deploy/k8s/service.yaml
+kubectl apply -n data-platform-pocs -f deploy/k8s/hpa.yaml
+kubectl apply -n data-platform-pocs -f deploy/k8s/stream-statefulset.yaml
+kubectl apply -n data-platform-pocs -f deploy/k8s/batch-importer-cronjob.yaml
+kubectl apply -n data-platform-pocs -f deploy/k8s/mlops-monitor-cronjob.yaml
 ```
 
 The Kubernetes files assume an image named:

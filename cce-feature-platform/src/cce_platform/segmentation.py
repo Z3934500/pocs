@@ -33,7 +33,7 @@ def _scale(points: list[FeaturePoint]) -> dict[str, tuple[float, float, float]]:
 
 
 def assign_segments(points: list[FeaturePoint], cluster_count: int = 3) -> dict[str, tuple[int, str]]:
-    """Tiny dependency-free k-means for local interview demo data."""
+    """Tiny dependency-free k-means for local demo data."""
     if not points:
         return {}
 
