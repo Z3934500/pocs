@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CCE Feature Platform PoC</title>
+    <link rel="stylesheet" href="/assets/style.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="topbar">
+        <div>
+          <p class="eyebrow">Customer Campaign Engine</p>
+          <h1>Feature Platform PoC</h1>
+        </div>
+        <button id="refreshButton" type="button">Refresh</button>
+      </section>
+
+      <section class="kpis" id="kpis"></section>
+
+      <section class="grid">
+        <article class="panel wide">
+          <div class="panel-header">
+            <h2>Gold Customer Features</h2>
+            <select id="segmentFilter" aria-label="Segment filter">
+              <option value="">All segments</option>
+            </select>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Customer</th>
+                  <th>Segment</th>
+                  <th>Monetary 30D</th>
+                  <th>Txn 30D</th>
+                  <th>Velocity 7D</th>
+                  <th>Risk</th>
+                  <th>Propensity</th>
+                </tr>
+              </thead>
+              <tbody id="featureRows"></tbody>
+            </table>
+          </div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-header">
+            <h2>Campaign Eligibility</h2>
+            <select id="campaignFilter" aria-label="Campaign filter">
+              <option value="INS_NEW">INS_NEW</option>
+              <option value="PF_UPSELL">PF_UPSELL</option>
+            </select>
+          </div>
+          <div id="eligibilityRows" class="stack"></div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-header">
+            <h2>Data Quality</h2>
+          </div>
+          <div id="dqRows" class="stack"></div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-header">
+            <h2>Identity Graph</h2>
+          </div>
+          <div id="identityRows" class="stack"></div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-header">
+            <h2>MLOps Drift</h2>
+          </div>
+          <div id="driftRows" class="stack"></div>
+        </article>
+      </section>
+    </main>
+    <script src="/assets/app.js"></script>
+  </body>
+</html>

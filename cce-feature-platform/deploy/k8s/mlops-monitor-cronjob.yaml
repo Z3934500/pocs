@@ -1,0 +1,47 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: cce-mlops-monitor
+  labels:
+    app: cce-mlops-monitor
+spec:
+  schedule: "35 2 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            app: cce-mlops-monitor
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: mlops-monitor
+              image: ghcr.io/OWNER/cce-feature-platform:latest
+              imagePullPolicy: IfNotPresent
+              command: ["python", "-m", "cce_platform.pipeline", "run"]
+              env:
+                - name: MLFLOW_TRACKING_URI
+                  value: databricks
+                - name: DATABRICKS_HOST
+                  valueFrom:
+                    secretKeyRef:
+                      name: cce-feature-platform-secrets
+                      key: databricks-host
+                      optional: true
+                - name: DATABRICKS_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: cce-feature-platform-secrets
+                      key: databricks-token
+                      optional: true
+              resources:
+                requests:
+                  cpu: 500m
+                  memory: 512Mi
+                limits:
+                  cpu: "1"
+                  memory: 1Gi

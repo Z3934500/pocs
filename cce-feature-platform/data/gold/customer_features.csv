@@ -1,0 +1,7 @@
+unified_customer_key,recency_days,tx_count_30d,monetary_30d,product_diversity,velocity_7d,cluster_id,segment_name,risk_score,updated_at
+U0005,0,6,10710.0,2,3,2,Priority,1.0,2026-07-02T04:30:18
+U0002,3,6,3600.0,2,3,1,Growth,0.7,2026-07-02T04:30:18
+U0004,4,6,705.0,2,3,1,Growth,0.41,2026-07-02T04:30:18
+U0003,2,6,1800.0,2,4,1,Growth,0.6,2026-07-02T04:30:18
+U0001,1,6,6090.0,2,5,2,Priority,1.0,2026-07-02T04:30:18
+U0006,1,6,555.0,2,6,0,Value Watch,0.635,2026-07-02T04:30:18

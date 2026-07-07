@@ -1,0 +1,2 @@
+{"campaign_id": "INS_NEW", "description": "New-to-insurance customer acquisition", "exclude_existing_product": "INSURANCE", "min_monetary_30d": 300.0}
+{"campaign_id": "PF_UPSELL", "description": "Premium financing cross-sell", "min_monetary_30d": 1500.0, "required_product": "PREMIUM_FINANCING"}

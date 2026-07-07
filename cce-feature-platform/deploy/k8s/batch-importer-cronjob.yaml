@@ -1,0 +1,55 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: cce-gold-to-redis-importer
+  labels:
+    app: cce-gold-to-redis-importer
+spec:
+  schedule: "10 2 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            app: cce-gold-to-redis-importer
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: importer
+              image: ghcr.io/OWNER/cce-feature-platform:latest
+              imagePullPolicy: IfNotPresent
+              command: ["python", "-m", "cce_platform.batch_importer", "--replace"]
+              env:
+                - name: DATABRICKS_HOST
+                  valueFrom:
+                    secretKeyRef:
+                      name: cce-feature-platform-secrets
+                      key: databricks-host
+                      optional: true
+                - name: DATABRICKS_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: cce-feature-platform-secrets
+                      key: databricks-token
+                      optional: true
+                - name: DATABRICKS_GOLD_CUSTOMER_FEATURES
+                  value: dbfs:/mnt/cce/gold/customer_features
+                - name: DATABRICKS_GOLD_POLICY_FEATURES
+                  value: dbfs:/mnt/cce/gold/policy_features
+                - name: REDIS_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: cce-feature-platform-secrets
+                      key: redis-url
+                      optional: true
+              resources:
+                requests:
+                  cpu: 500m
+                  memory: 512Mi
+                limits:
+                  cpu: "1"
+                  memory: 1Gi

@@ -1,0 +1,13 @@
+services:
+  oee-data-platform:
+    build: .
+    ports:
+      - "8020:8000"
+    environment:
+      OEE_ENV: local
+      OEE_SQLITE_PATH: /app/data/warehouse/oee_platform.sqlite
+    volumes:
+      - oee_data:/app/data
+
+volumes:
+  oee_data:

@@ -1,0 +1,45 @@
+{
+  "connectorConfiguration": {
+    "connector.class": "io.debezium.connector.mysql.MySqlConnector",
+    "tasks.max": "1",
+    "database.hostname": "${RDS_MYSQL_HOST}",
+    "database.port": "3306",
+    "database.user": "${RDS_MYSQL_USER}",
+    "database.password": "${RDS_MYSQL_PASSWORD}",
+    "database.server.id": "184054",
+    "topic.prefix": "cce.rds",
+    "database.include.list": "campaign_engine",
+    "table.include.list": "campaign_engine.orders,campaign_engine.cart_events",
+    "include.schema.changes": "false",
+    "snapshot.mode": "initial",
+    "decimal.handling.mode": "double",
+    "tombstones.on.delete": "false",
+    "message.key.columns": "campaign_engine.orders:customer_id;campaign_engine.cart_events:customer_id",
+    "schema.history.internal.kafka.bootstrap.servers": "${MSK_BOOTSTRAP_SERVERS}",
+    "schema.history.internal.kafka.topic": "schema-history.cce.rds.mysql"
+  },
+  "connectorName": "cce-mysql-cdc",
+  "kafkaCluster": {
+    "apacheKafkaCluster": {
+      "bootstrapServers": "${MSK_BOOTSTRAP_SERVERS}",
+      "vpc": {
+        "securityGroups": ["${MSK_CONNECT_SECURITY_GROUP_ID}"],
+        "subnets": ["${PRIVATE_SUBNET_A}", "${PRIVATE_SUBNET_B}"]
+      }
+    }
+  },
+  "kafkaClusterClientAuthentication": {
+    "authenticationType": "NONE"
+  },
+  "kafkaClusterEncryptionInTransit": {
+    "encryptionType": "PLAINTEXT"
+  },
+  "kafkaConnectVersion": "2.7.1",
+  "capacity": {
+    "provisionedCapacity": {
+      "mcuCount": 1,
+      "workerCount": 1
+    }
+  },
+  "serviceExecutionRoleArn": "${MSK_CONNECT_ROLE_ARN}"
+}

@@ -1,0 +1,4 @@
+policy_id,unified_customer_key,policy_type,policy_status,policy_tenure_days,premium_amount,claim_count_12m,renewal_due_days,lapse_risk_score,updated_at
+POL-INS-1001,U0001,INSURANCE,ACTIVE,655,1380.0,0,62,0.069,2026-07-02T04:30:18
+POL-PF-2005,U0005,PREMIUM_FINANCING,ACTIVE,488,4600.0,1,34,0.627,2026-07-02T04:30:18
+POL-INV-3003,U0002,INVESTMENT_LINKED,PENDING_RENEWAL,195,2100.0,0,14,0.488,2026-07-02T04:30:18

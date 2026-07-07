@@ -1,0 +1,77 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: cce-realtime-feature-stream
+  labels:
+    app: cce-realtime-feature-stream
+spec:
+  clusterIP: None
+  selector:
+    app: cce-realtime-feature-stream
+  ports:
+    - name: metrics
+      port: 9404
+      targetPort: 9404
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: cce-realtime-feature-stream
+  labels:
+    app: cce-realtime-feature-stream
+spec:
+  serviceName: cce-realtime-feature-stream
+  replicas: 2
+  selector:
+    matchLabels:
+      app: cce-realtime-feature-stream
+  template:
+    metadata:
+      labels:
+        app: cce-realtime-feature-stream
+    spec:
+      terminationGracePeriodSeconds: 45
+      containers:
+        - name: stream-job
+          image: ghcr.io/OWNER/cce-feature-stream:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              valueFrom:
+                secretKeyRef:
+                  name: cce-feature-platform-secrets
+                  key: kafka-bootstrap-servers
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: cce-feature-platform-secrets
+                  key: redis-url
+            - name: KAFKA_STREAMS_APPLICATION_ID
+              value: cce-realtime-feature-stream
+            - name: STATE_DIR
+              value: /var/lib/kafka-streams
+            - name: INPUT_TOPICS
+              value: cce.rds.orders,cce.rds.cart_events
+          volumeMounts:
+            - name: rocksdb-state
+              mountPath: /var/lib/kafka-streams
+          resources:
+            requests:
+              cpu: "1"
+              memory: 2Gi
+            limits:
+              cpu: "2"
+              memory: 3Gi
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "test -d /var/lib/kafka-streams"]
+            initialDelaySeconds: 15
+            periodSeconds: 20
+  volumeClaimTemplates:
+    - metadata:
+        name: rocksdb-state
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 20Gi

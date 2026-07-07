@@ -1,0 +1,11 @@
+{"downtime": {"minutes": 30, "reason": "Material Wait"}, "machineNo": "KS-PRESS-01", "okQty": 589, "outputQty": 600, "runtime_minutes": 450, "shift": "DAY", "shiftDate": "2026-06-24"}
+{"downtime": {"minutes": 30, "reason": "Material Wait"}, "machineNo": "KS-PRESS-02", "okQty": 604, "outputQty": 615, "runtime_minutes": 450, "shift": "DAY", "shiftDate": "2026-06-24"}
+{"downtime": {"minutes": 33, "reason": "Material Wait"}, "machineNo": "KS-PRESS-01", "okQty": 599, "outputQty": 610, "runtime_minutes": 447, "shift": "DAY", "shiftDate": "2026-06-25"}
+{"downtime": {"minutes": 33, "reason": "Material Wait"}, "machineNo": "KS-PRESS-02", "okQty": 614, "outputQty": 625, "runtime_minutes": 447, "shift": "DAY", "shiftDate": "2026-06-25"}
+{"downtime": {"minutes": 36, "reason": "Material Wait"}, "machineNo": "KS-PRESS-01", "okQty": 609, "outputQty": 620, "runtime_minutes": 444, "shift": "DAY", "shiftDate": "2026-06-26"}
+{"downtime": {"minutes": 36, "reason": "Material Wait"}, "machineNo": "KS-PRESS-02", "okQty": 624, "outputQty": 635, "runtime_minutes": 444, "shift": "DAY", "shiftDate": "2026-06-26"}
+{"downtime": {"minutes": 112, "reason": "Sensor Failure"}, "machineNo": "KS-PRESS-01", "okQty": 419, "outputQty": 430, "runtime_minutes": 368, "shift": "DAY", "shiftDate": "2026-06-27"}
+{"downtime": {"minutes": 39, "reason": "Material Wait"}, "machineNo": "KS-PRESS-02", "okQty": 634, "outputQty": 645, "runtime_minutes": 441, "shift": "DAY", "shiftDate": "2026-06-27"}
+{"downtime": {"minutes": 42, "reason": "Material Wait"}, "machineNo": "KS-PRESS-01", "okQty": 629, "outputQty": 640, "runtime_minutes": 438, "shift": "DAY", "shiftDate": "2026-06-28"}
+{"downtime": {"minutes": 42, "reason": "Material Wait"}, "machineNo": "KS-PRESS-02", "okQty": 644, "outputQty": 655, "runtime_minutes": 438, "shift": "DAY", "shiftDate": "2026-06-28"}
+{"downtime": {"minutes": 30, "reason": "Bad Quality Count"}, "machineNo": "KS-PRESS-02", "okQty": 640, "outputQty": 615, "runtime_minutes": 450, "shift": "DAY", "shiftDate": "2026-06-26"}

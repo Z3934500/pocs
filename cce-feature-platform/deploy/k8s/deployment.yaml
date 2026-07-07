@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cce-feature-platform
+  labels:
+    app: cce-feature-platform
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: cce-feature-platform
+  template:
+    metadata:
+      labels:
+        app: cce-feature-platform
+    spec:
+      containers:
+        - name: api
+          image: ghcr.io/OWNER/cce-feature-platform:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+          env:
+            - name: CCE_SQLITE_PATH
+              value: /app/data/warehouse/cce_platform.sqlite
+            - name: CCE_ONLINE_STORE_PATH
+              value: /app/data/online/feature_store.json
+            - name: FEATURE_API_DEFAULT_SCOPE
+              value: campaign_read
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: cce-feature-platform-secrets
+                  key: redis-url
+                  optional: true
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
