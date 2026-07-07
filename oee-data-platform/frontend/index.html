@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OEE Data Platform PoC</title>
+    <link rel="stylesheet" href="/assets/style.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="topbar">
+        <div>
+          <p class="eyebrow">Industrial Data Platform</p>
+          <h1>OEE Monitoring PoC</h1>
+        </div>
+        <div class="controls">
+          <select id="siteFilter" aria-label="Site filter">
+            <option value="">All sites</option>
+            <option value="SZ">Suzhou</option>
+            <option value="KS">Kunshan</option>
+          </select>
+          <button id="refreshButton" type="button">Refresh</button>
+        </div>
+      </section>
+
+      <section class="kpis" id="kpis"></section>
+
+      <section class="grid">
+        <article class="panel wide">
+          <div class="panel-header">
+            <h2>Daily Machine OEE</h2>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Machine</th>
+                  <th>Site</th>
+                  <th>OEE</th>
+                  <th>Availability</th>
+                  <th>Performance</th>
+                  <th>Quality</th>
+                  <th>Downtime</th>
+                </tr>
+              </thead>
+              <tbody id="oeeRows"></tbody>
+            </table>
+          </div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-header">
+            <h2>Machine Ranking</h2>
+          </div>
+          <div id="machineRows" class="stack"></div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-header">
+            <h2>Downtime Pareto</h2>
+          </div>
+          <div id="downtimeRows" class="stack"></div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-header">
+            <h2>Anomaly Alerts</h2>
+          </div>
+          <div id="anomalyRows" class="stack"></div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-header">
+            <h2>Data Quality</h2>
+          </div>
+          <div id="dqRows" class="stack"></div>
+        </article>
+      </section>
+    </main>
+    <script src="/assets/app.js"></script>
+  </body>
+</html>

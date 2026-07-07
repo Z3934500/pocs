@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: oee-data-platform
+spec:
+  type: ClusterIP
+  selector:
+    app: oee-data-platform
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8000

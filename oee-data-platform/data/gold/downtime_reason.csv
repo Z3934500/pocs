@@ -1,0 +1,13 @@
+site_code,shift_date,downtime_reason,downtime_minutes
+KS,2026-06-24,Material Wait,60.0
+KS,2026-06-25,Material Wait,66.0
+KS,2026-06-26,Material Wait,72.0
+KS,2026-06-27,Material Wait,39.0
+KS,2026-06-27,Sensor Failure,112.0
+KS,2026-06-28,Material Wait,84.0
+SZ,2026-06-24,Tool Change,76.0
+SZ,2026-06-25,Tool Change,80.0
+SZ,2026-06-26,Tool Change,84.0
+SZ,2026-06-27,Tool Change,88.0
+SZ,2026-06-28,Hydraulic Fault,126.0
+SZ,2026-06-28,Tool Change,46.0

@@ -1,0 +1,5 @@
+site_code,site_name,country,line_name,machine_number,machine_type,ideal_cycle_seconds,planned_minutes_per_shift
+SZ,Suzhou Factory,CN,Assembly A,SZ-CNC-01,CNC,42.0,480
+SZ,Suzhou Factory,CN,Assembly A,SZ-CNC-02,CNC,45.0,480
+KS,Kunshan Factory,CN,Machining B,KS-PRESS-01,PRESS,36.0,480
+KS,Kunshan Factory,CN,Machining B,KS-PRESS-02,PRESS,39.0,480

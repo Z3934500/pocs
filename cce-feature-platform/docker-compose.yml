@@ -1,0 +1,13 @@
+services:
+  cce-feature-platform:
+    build: .
+    ports:
+      - "8010:8000"
+    environment:
+      CCE_ENV: local
+      CCE_SQLITE_PATH: /app/data/warehouse/cce_platform.sqlite
+    volumes:
+      - cce_data:/app/data
+
+volumes:
+  cce_data:
