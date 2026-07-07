@@ -1,11 +1,5 @@
 # Real-Time Feature & Campaign Platform - 480K Active Users
 
-这份材料把同一个项目从三个角度讲清楚：
-
-- Customer Campaign Engine: 偏 PM/BA 和业务规则设计。
-- High-Throughput Feature & Data Platform: 偏 Databricks、Medallion、feature serving。
-- Real-Time Feature & User Segmentation Platform: 偏 CDC、Kafka、Redis、EKS 生产化。
-
 ## 1. Architecture
 
 ### 1.1 Promotion Stage Architecture
