@@ -11,6 +11,6 @@ This folder contains two independent proof-of-concept projects that demonstrate 
 
 ## Project Selection Guide
 
-Use `oee-data-platform` for industrial equipment, mining, manufacturing or operations analytics discussions. Use `cce-feature-platform` for enterprise customer data platform topics: Bronze -> Silver -> Gold modeling, identity resolution, feature serving and downstream campaign activation. For Kafka / CDC / EKS architecture, see `cce-feature-platform/docs/REALTIME_FEATURE_PLATFORM_480K.md`.
+Use `oee-data-platform` for industrial equipment, mining, manufacturing or operations analytics discussions. Use `cce-feature-platform` for enterprise customer data platform topics: Bronze -> Silver -> Gold modeling, identity resolution, feature serving and downstream campaign activation. For an extended real-time architecture variant covering CDC, Kafka, Redis and EKS, see `cce-feature-platform/docs/REALTIME_FEATURE_PLATFORM_480K.md`.
 
 Both PoCs are intentionally compact. They prioritize runnable architecture and engineering patterns over pretending to be full production implementations.
