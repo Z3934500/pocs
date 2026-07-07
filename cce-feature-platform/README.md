@@ -1,6 +1,6 @@
 # CCE Feature Platform PoC
 
-Customer Campaign Engine / CDP style feature platform for interview demonstration.
+Customer Campaign Engine / CDP style feature platform demonstrating medallion data modeling, identity resolution, feature serving and deployment patterns.
 
 ## What This Shows
 
@@ -83,7 +83,7 @@ python -m cce_platform.realtime run
 
 The local online store is a JSON-backed stand-in for Redis. The production discussion maps it to Debezium + MSK + EKS stream job + ElastiCache.
 
-Detailed interview material:
+Detailed architecture material:
 
 ```text
 docs/REALTIME_FEATURE_PLATFORM_480K.md
@@ -107,8 +107,8 @@ The repository-level workflow is in:
 
 It installs dependencies, runs tests and builds Docker images for both PoCs.
 
-## Interview Talk Track
+## Design Narrative
 
-> This PoC is based on a customer campaign data platform. I separated raw ingestion, standardized identity and feature engineering into Bronze, Silver and Gold layers. The important design point is resolving scattered NRIC, FIN and Passport identifiers into a unified customer key before feature computation, then adding graph-style candidate matching for missing-ID records that need controlled review.
+This PoC is based on a customer campaign data platform. It separates raw ingestion, standardized identity and feature engineering into Bronze, Silver and Gold layers. The important design point is resolving scattered NRIC, FIN and Passport identifiers into a unified customer key before feature computation, then adding graph-style candidate matching for missing-ID records that need controlled review.
 
-> Databricks owns offline customer/policy features, MLflow model runs and drift monitoring. EKS and Redis own the online Feature API, HPA scaling, request-time authorization and low-latency campaign serving. This keeps transactional RDS and Databricks workloads isolated from campaign lookup traffic while still giving the models governed features.
+Databricks owns offline customer/policy features, MLflow model runs and drift monitoring. EKS and Redis own the online Feature API, HPA scaling, request-time authorization and low-latency campaign serving. This keeps transactional RDS and Databricks workloads isolated from campaign lookup traffic while still giving the models governed features.

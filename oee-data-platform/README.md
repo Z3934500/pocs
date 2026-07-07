@@ -1,6 +1,6 @@
 # OEE Data Platform PoC
 
-Industrial equipment data engineering PoC for Senior Data Engineer interviews.
+Industrial equipment data engineering PoC for multi-site OEE analytics, data quality and operational dashboards.
 
 ## What This Shows
 
@@ -70,6 +70,6 @@ docker build -t oee-data-platform .
 docker run --rm -p 8020:8000 oee-data-platform
 ```
 
-## Interview Talk Track
+## Design Narrative
 
-> My real OEE project involved Web Service APIs, inconsistent JSON fields across Suzhou and Kunshan, static Excel master data, Python data quality logic, SQL loading and Tableau refresh. This PoC rebuilds the same business problem as a full-stack data platform: ingestion, medallion layers, database model, API service, data quality, anomaly detection and dashboard.
+The source OEE problem involved Web Service APIs, inconsistent JSON fields across Suzhou and Kunshan, static Excel master data, Python data quality logic, SQL loading and Tableau refresh. This PoC rebuilds the same business problem as a full-stack data platform: ingestion, medallion layers, database model, API service, data quality, anomaly detection and dashboard.
