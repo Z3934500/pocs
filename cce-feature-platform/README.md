@@ -18,6 +18,7 @@ Customer Campaign Engine / CDP style feature platform demonstrating medallion da
 - Databricks job template for enterprise deployment discussion
 - CDC-to-online-feature-store simulation for real-time feature discussion
 - 480K-active-user AWS sizing and deployment notes
+- Big-data EMR / Delta extension notes for Spark synthetic data, Airflow orchestration and S3 lakehouse layout
 
 ## Architecture
 
@@ -88,6 +89,7 @@ Detailed architecture material:
 ```text
 docs/REALTIME_FEATURE_PLATFORM_480K.md
 docs/ARCHITECTURE_MLOPS_GRAPHML_DEPLOYMENT.md
+docs/BIG_DATA_EMR_DELTA_EXTENSION.md
 ```
 
 ## Docker Run

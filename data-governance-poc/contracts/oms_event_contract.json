@@ -1,0 +1,111 @@
+{
+  "name": "oms-outbox-event-contract",
+  "owner": "data-platform",
+  "description": "Executable checks for OMS Outbox events and inventory reconciliation.",
+  "tables": {
+    "outbox_events": [
+      "event_id",
+      "aggregate_type",
+      "aggregate_id",
+      "event_type",
+      "payload_json",
+      "status",
+      "created_at",
+      "published_at"
+    ],
+    "sku_inventory": [
+      "sku_id",
+      "product_name",
+      "available_stock",
+      "reserved_stock",
+      "sold_stock",
+      "unit_price_cents",
+      "updated_at"
+    ],
+    "inventory_movements": [
+      "movement_id",
+      "order_id",
+      "sku_id",
+      "movement_type",
+      "quantity",
+      "created_at"
+    ]
+  },
+  "event_types": [
+    "order.created",
+    "inventory.reserved",
+    "payment.captured",
+    "payment.failed",
+    "inventory.committed",
+    "inventory.released",
+    "order.confirmed",
+    "order.cancelled",
+    "order.timeout",
+    "shipment.created"
+  ],
+  "payload_required_fields": {
+    "order.created": [
+      "order_id",
+      "customer_id",
+      "status",
+      "total_amount_cents"
+    ],
+    "inventory.reserved": [
+      "order_id",
+      "reservation_id",
+      "items",
+      "expires_at"
+    ],
+    "payment.captured": [
+      "order_id",
+      "provider_ref",
+      "amount_cents"
+    ],
+    "payment.failed": [
+      "order_id",
+      "provider_ref"
+    ],
+    "inventory.committed": [
+      "order_id",
+      "items"
+    ],
+    "inventory.released": [
+      "order_id",
+      "reason",
+      "items"
+    ],
+    "order.confirmed": [
+      "order_id",
+      "status"
+    ],
+    "order.cancelled": [
+      "order_id",
+      "reason"
+    ],
+    "order.timeout": [
+      "order_id"
+    ],
+    "shipment.created": [
+      "order_id"
+    ]
+  },
+  "freshness": {
+    "max_event_age_minutes": 1440,
+    "pending_warn_minutes": 30,
+    "pending_fail_minutes": 120,
+    "published_delay_warn_seconds": 60,
+    "published_delay_fail_seconds": 300,
+    "future_timestamp_warn_seconds": 60,
+    "future_timestamp_fail_seconds": 300
+  },
+  "volume": {
+    "min_events_24h": 1,
+    "max_events_24h": 100000
+  },
+  "inventory_baseline": {
+    "SKU-RED-001": 120,
+    "SKU-BLK-002": 80,
+    "SKU-SIL-003": 35,
+    "SKU-BAT-004": 240
+  }
+}

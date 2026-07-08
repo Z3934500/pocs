@@ -125,6 +125,8 @@ Examples:
 
 Downstream OLAP models can turn these events into facts, daily snapshots and slowly changing dimensions. For example, a customer dimension may use SCD Type 2 to preserve historical segment changes, while inventory analytics may use daily stock snapshots to analyze stockout risk and turnover.
 
+For the longer version of this idea, including data contracts, metadata governance, Unity Catalog / Delta Lake and OLAP idempotency keys, see [OLTP_OLAP_HTAP_MAPPING.md](docs/OLTP_OLAP_HTAP_MAPPING.md#data-contracts-metadata-and-idempotency). For executable SRE-style checks over the OMS Outbox and inventory state, see [`../data-governance-poc`](../data-governance-poc/README.md).
+
 ## Spring Boot Original vs Python Companion
 
 | Version | Best for | Notes |
