@@ -24,6 +24,7 @@ In simple terms:
 | Typical examples | Bank withdrawal, ecommerce checkout, hotel booking | Quarterly report, user profile analysis, inventory turnover forecast |
 | Response target | Milliseconds, high concurrency, strict state transitions | Seconds or minutes, complex scans over large data |
 | Data state | Current mutable data | Historical, cleaned and curated data |
+| Time semantics | Latest valid state, such as current stock or order status | State over time, including snapshots, event history and slowly changing dimensions |
 | Consistency | ACID, idempotency and transaction boundaries | Reproducible lineage, data quality and governance |
 | Storage model | Row-store such as MySQL or PostgreSQL | Column-store or lakehouse such as ClickHouse, Doris, Delta or Parquet |
 | Data modeling | 3NF, less redundancy, safer writes | Star / snowflake / wide tables, more redundancy, faster reads |
@@ -37,6 +38,19 @@ OLAP usually uses star or snowflake models because query speed and business read
 - Star model: one central fact table, such as `fact_order_line`, connected to dimensions such as `dim_customer`, `dim_sku`, `dim_date` and `dim_channel`. It is simple and fast for BI.
 - Snowflake model: dimensions are normalized further, such as `dim_sku -> dim_category -> dim_brand`. It reduces dimension duplication but adds joins.
 - Gold / feature tables: for dashboards or machine learning, data can be denormalized even more, such as daily OEE metrics or customer campaign features.
+
+## Time And Change Capture
+
+A key OLAP concern is not only what the value is now, but how it changed over time. OLTP tables often update the latest state in place: an order moves from `RESERVED` to `CONFIRMED`, a customer changes segment, or a SKU moves from available stock to reserved stock. OLAP needs to preserve those transitions so analysts can answer questions such as what the customer segment was at order time, how long inventory stayed reserved, or what stock looked like at the end of each day.
+
+This is where event history, CDC, snapshots and slowly changing dimensions matter:
+
+- Event history captures facts as they happen, such as `order.created`, `inventory.reserved`, `payment.captured` and `inventory.released`.
+- Periodic snapshots capture state at a point in time, such as daily inventory balance or daily customer feature values.
+- SCD Type 1 overwrites dimension attributes when history is not needed.
+- SCD Type 2 preserves dimension versions with effective dates, so historical facts can join to the correct dimension version.
+
+So OLTP protects the current truth; OLAP preserves the timeline of truth.
 
 ## HTAP Note
 
