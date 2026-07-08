@@ -112,6 +112,19 @@ OLAP is the system that reads the history. The existing OEE and CCE projects sho
 
 In a production version, OMS would typically run on MySQL or PostgreSQL, use Redis + Lua for hot inventory reservation, publish Outbox events to Kafka, and feed analytical stores such as ClickHouse, Doris, Databricks or a lakehouse. This keeps checkout latency and analytical scans from interfering with each other while still allowing HTAP-style near-real-time reporting through CDC.
 
+## Time And Change Capture
+
+OLTP owns the latest valid business state, but OLAP needs the history of how that state changed. In this PoC, order status history, inventory movements and Outbox events are the bridge from current-state transactions to time-aware analytics.
+
+Examples:
+
+- `orders.status` shows the current state of the order.
+- `order_status_history` captures each state transition over time.
+- `inventory_movements` captures reserve, commit and release changes as facts.
+- `outbox_events` makes those changes available to Kafka / CDC consumers.
+
+Downstream OLAP models can turn these events into facts, daily snapshots and slowly changing dimensions. For example, a customer dimension may use SCD Type 2 to preserve historical segment changes, while inventory analytics may use daily stock snapshots to analyze stockout risk and turnover.
+
 ## Spring Boot Original vs Python Companion
 
 | Version | Best for | Notes |

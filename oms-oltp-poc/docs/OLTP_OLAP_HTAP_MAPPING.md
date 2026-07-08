@@ -15,6 +15,7 @@ OLTP is the system that runs the business transaction. OLAP is the system that e
 | Consistency | ACID and strong state transitions | Reproducible batch/stream outputs and lineage |
 | Storage model | Row-store, 3NF, transactional indexes | Column-store/lakehouse, star or wide feature tables |
 | Write pattern | Many small concurrent writes | Large scans, joins, aggregations and model jobs |
+| Time handling | Current valid state and transaction timestamps | Historical timelines, snapshots, event history and slowly changing dimensions |
 
 ## Spring Boot Original And Python Companion
 
@@ -57,6 +58,20 @@ This is why the Spring Boot microservice version is worth keeping: it can show t
 | Compensation path | cancel, failed payment and timeout release stock | Saga orchestrator / choreography |
 | Timeout handler | `POST /api/reservations/expire` | scheduled worker / delayed queue |
 | Reconciliation | inventory movement and status history tables | periodic ERP/WMS reconciliation jobs |
+
+## Time And Change Capture For OLAP
+
+OLTP systems often overwrite the current state because operational correctness depends on the latest truth. OLAP systems need to preserve the timeline because analysis depends on what was true at a particular point in time.
+
+| Pattern | What it captures | OMS example | OLAP use |
+| --- | --- | --- | --- |
+| Event history | Every business change as an immutable fact | `order.created`, `inventory.reserved`, `payment.captured` | Funnel analysis, cycle-time analysis, compensation monitoring |
+| Status history | Lifecycle transitions for one aggregate | `RESERVED -> CONFIRMED -> SHIPPED` | SLA tracking, stuck-order detection, operational trend reports |
+| Periodic snapshot | State at a regular point in time | daily available/reserved/sold stock | Inventory turnover, stockout risk, end-of-day reporting |
+| SCD Type 1 | Latest dimension attributes only | current SKU name or current customer phone | Simple lookup when history is not required |
+| SCD Type 2 | Versioned dimension attributes with effective dates | customer segment at order time, SKU category at sale time | Correct historical reporting after customer/product attributes change |
+
+For example, if a customer moves from `Retail` to `VIP`, OLTP only needs the latest customer segment for current service behavior. OLAP may need both versions so last quarter's orders still report under the segment that was true at order time.
 
 ## Event Contract
 
