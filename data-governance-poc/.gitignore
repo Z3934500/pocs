@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+pytest-cache-files-*/
+data/*.sqlite
+data/*.sqlite-*
+data/pytest-temp/
+data/test_runtime/

@@ -13,8 +13,9 @@ In simple terms:
 | --- | --- | --- | --- |
 | `inventory-oms-poc` | OLTP | Spring Boot OMS microservice, DDD, inventory reservation | Original Java service reference for controller/service/repository layering, bounded contexts, domain events and Saga handoff; includes the [Redis + Kafka + Saga architecture diagram](inventory-oms-poc/README.md#architecture-diagram) |
 | `oms-oltp-poc` | OLTP | Order management, inventory reservation, Saga, Outbox | Live order processing with ACID stock reservation, payment commit, compensation and event handoff |
+| `data-governance-poc` | Data governance / Data SRE | Executable contracts, freshness, drift and reconciliation checks | Monitors the OMS Outbox and inventory state so downstream OLAP tables and ML features are trustworthy |
 | `oee-data-platform` | OLAP | Industrial equipment analytics, medallion data platform | Multi-site OEE ingestion, schema standardization, data quality, anomaly detection and dashboard |
-| `cce-feature-platform` | OLAP + online serving | Databricks ETL, customer features, real-time feature store | Customer Campaign Engine / CDP style platform with identity resolution, segmentation, eligibility and API consumption |
+| `cce-feature-platform` | OLAP + online serving | Databricks ETL, customer features, real-time feature store | Customer Campaign Engine / CDP style platform with identity resolution, segmentation, eligibility, API consumption and [big-data EMR/Delta extension](cce-feature-platform/docs/BIG_DATA_EMR_DELTA_EXTENSION.md) |
 
 ## OLTP vs OLAP
 
@@ -52,6 +53,20 @@ This is where event history, CDC, snapshots and slowly changing dimensions matte
 
 So OLTP protects the current truth; OLAP preserves the timeline of truth.
 
+## Data Contracts And Lakehouse Governance
+
+The metadata story can be summarized as three layers:
+
+- Data contract defines the producer-consumer promise: schema, field meaning, time semantics, quality rules, ownership and freshness expectations.
+- Unity Catalog and Delta Lake provide lakehouse governance and reliable table state: catalog metadata, access control, lineage, audit, schema enforcement, table history, ACID writes and change capture capabilities.
+- ETL / ELT executes the contract: normalize raw payloads, validate quality rules, deduplicate events, merge changes, build SCD dimensions, publish snapshots and make Gold tables reproducible.
+
+The important distinction is that Unity Catalog and Delta Lake provide strong infrastructure for metadata and table governance, but the business data contract still has to be designed by the team. A table can be governed and versioned, but the team still needs to define what `event_time`, `effective_from`, `customer_segment`, `available_stock` and freshness SLA actually mean.
+
+For OLTP, idempotency usually prevents duplicate commands, such as retrying the same checkout request or payment capture. For OLAP, idempotency prevents duplicate or incorrect historical facts. That usually means using a stable `event_id` when available, or a version-aware key such as `business_key + event_time`, `business_key + source_updated_at`, `business_key + effective_from`, plus optional `sequence_number`, `batch_id` or `record_hash`. In OLTP, identity is often the record. In OLAP, identity is often the record version in time.
+
+The runnable version of this idea is `data-governance-poc`: it turns the contract into SRE-style checks for schema drift, payload shape, freshness, pending lag, timestamp deviation, duplicate semantic events and inventory reconciliation.
+
 ## HTAP Note
 
 Modern databases increasingly advertise HTAP, meaning one engine can support both transactional and analytical workloads. In real production architecture, teams still usually separate hot writes from heavy reads through read replicas, CDC, Kafka, materialized views, lakehouse tables or dedicated OLAP stores. The reason is practical: checkout traffic and large dashboard scans should not slow each other down.
@@ -79,8 +94,10 @@ Use `oms-oltp-poc` when discussing live transactions, ACID consistency, high-con
 
 Use `inventory-oms-poc` when discussing how this OMS would look in a Java / Spring Boot enterprise service layout, especially DDD bounded contexts, aggregates, repositories, domain services and domain events.
 
+Use `data-governance-poc` when discussing executable data contracts, data quality monitoring, data SRE, freshness checks, timestamp deviation, duplicate detection and reconciliation between OLTP facts and OLAP-ready history.
+
 Use `oee-data-platform` for industrial equipment, mining, manufacturing or operations analytics discussions.
 
-Use `cce-feature-platform` for customer data platform topics: Bronze -> Silver -> Gold modeling, identity resolution, feature serving and downstream campaign activation. For an extended real-time architecture variant covering CDC, Kafka, Redis and EKS, see `cce-feature-platform/docs/REALTIME_FEATURE_PLATFORM_480K.md`.
+Use `cce-feature-platform` for customer data platform topics: Bronze -> Silver -> Gold modeling, identity resolution, feature serving and downstream campaign activation. For real-time CDC, Kafka, Redis and EKS sizing, see `cce-feature-platform/docs/REALTIME_FEATURE_PLATFORM_480K.md`. For Spark synthetic data, EMR/Delta, S3 layout and Airflow orchestration, see `cce-feature-platform/docs/BIG_DATA_EMR_DELTA_EXTENSION.md`.
 
 All PoCs are intentionally compact. They prioritize runnable architecture and engineering patterns over pretending to be full production implementations.

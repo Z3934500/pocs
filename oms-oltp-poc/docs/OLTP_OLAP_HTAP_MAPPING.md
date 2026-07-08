@@ -73,6 +73,36 @@ OLTP systems often overwrite the current state because operational correctness d
 
 For example, if a customer moves from `Retail` to `VIP`, OLTP only needs the latest customer segment for current service behavior. OLAP may need both versions so last quarter's orders still report under the segment that was true at order time.
 
+## Data Contracts, Metadata And Idempotency
+
+The OMS event stream is not only integration plumbing. It is also the contract boundary between operational systems and analytical systems.
+
+| Layer | Responsibility | OMS / OLAP example |
+| --- | --- | --- |
+| Data contract | Defines the producer-consumer promise | Event schema, field meaning, required fields, time semantics, quality rules, owner, freshness SLA |
+| Metadata governance | Records and controls the contract | Catalog entry, table owner, lineage, access policy, audit history, schema version |
+| Delta / lakehouse table state | Makes curated data reliable to read and reproduce | ACID writes, schema enforcement, table history, time travel, change feed |
+| ETL / ELT processing | Executes the contract in the right order | Normalize raw payloads, validate quality, deduplicate, merge, build SCD dimensions and publish snapshots |
+
+Unity Catalog and Delta Lake are strong infrastructure pieces for this layer because they provide governed metadata, access control, lineage, auditability, schema enforcement/evolution and reliable versioned tables. They are not the business contract by themselves. The team still has to define what `event_time`, `source_updated_at`, `available_stock`, `customer_segment`, `effective_from` and the freshness SLA mean.
+
+Time is the reason OLAP processing cares so much about sequence. A late event, duplicate event or out-of-order update can change the historical answer. The pipeline therefore needs explicit ordering and replay rules: which timestamp is business time, which timestamp is ingestion time, which source wins during conflicts, and how late-arriving data is corrected.
+
+Data format is the other half of the contract. OLAP jobs need predictable shape because the same data is repeatedly scanned, joined and aggregated. Stable field names, types, nullability, units, timezone rules, enum values and nested payload structure decide whether downstream models are reproducible.
+
+For OLTP, idempotency usually means retry-safe commands. For OLAP, idempotency means replay-safe history. In other words, OLTP identity is often the current record or command. OLAP identity is often the record version in time.
+
+| OLAP pattern | Idempotent key idea | Example |
+| --- | --- | --- |
+| Immutable event facts | `event_id`, or `business_key + event_type + event_time` | One `inventory.reserved` event is loaded once even if Kafka redelivers it |
+| CDC merge | `source_pk + source_updated_at + sequence_number` | Later update for the same order wins deterministically |
+| Periodic snapshot | `entity_key + snapshot_date` | One inventory balance row per SKU per day |
+| SCD Type 2 dimension | `natural_key + valid_from`, with a surrogate dimension key | Customer segment version valid at order time |
+| Record comparison | `record_hash` over meaningful attributes | Detect whether a dimension version actually changed |
+| Batch replay | `batch_id` or source file identity plus row key | Reprocessing the same batch does not duplicate facts |
+
+This is the practical bridge from OMS to OEE / CCE: OMS emits trustworthy operational events, CDC/Kafka preserves the sequence, Bronze keeps raw history, Silver enforces contracts and normalizes format, and Gold turns that versioned history into dashboards, features and forecasts.
+
 ## Event Contract
 
 The local Outbox emits these event types:
