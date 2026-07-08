@@ -1,0 +1,7 @@
+services:
+  oms-oltp-poc:
+    build: .
+    ports:
+      - "8030:8000"
+    volumes:
+      - ./data:/app/data

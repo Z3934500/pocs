@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OMS OLTP PoC</title>
+    <link rel="stylesheet" href="/assets/style.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">OLTP transaction console</p>
+          <h1>OMS Order Flow</h1>
+        </div>
+        <div class="actions">
+          <button id="resetBtn" type="button">Reset Demo</button>
+          <button id="publishBtn" type="button">Publish Outbox</button>
+        </div>
+      </header>
+
+      <section class="metrics" id="metrics"></section>
+
+      <section class="workspace">
+        <form class="panel order-form" id="orderForm">
+          <div class="panel-title">
+            <h2>Create Order</h2>
+            <span>ACID reservation</span>
+          </div>
+          <label>
+            Customer
+            <select id="customerSelect"></select>
+          </label>
+          <div class="item-grid">
+            <label>
+              SKU
+              <select id="skuSelect"></select>
+            </label>
+            <label>
+              Quantity
+              <input id="quantityInput" type="number" value="2" min="1" />
+            </label>
+          </div>
+          <button type="submit">Reserve Inventory</button>
+          <p class="note" id="message"></p>
+        </form>
+
+        <section class="panel">
+          <div class="panel-title">
+            <h2>Inventory</h2>
+            <span>row-store stock buckets</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>SKU</th>
+                  <th>Product</th>
+                  <th>Available</th>
+                  <th>Reserved</th>
+                  <th>Sold</th>
+                </tr>
+              </thead>
+              <tbody id="inventoryRows"></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <section class="workspace bottom">
+        <section class="panel">
+          <div class="panel-title">
+            <h2>Orders</h2>
+            <span>Saga state</span>
+          </div>
+          <div id="orderList" class="order-list"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-title">
+            <h2>Outbox</h2>
+            <span>Kafka handoff</span>
+          </div>
+          <div id="eventList" class="event-list"></div>
+        </section>
+      </section>
+    </main>
+    <script src="/assets/app.js"></script>
+  </body>
+</html>
