@@ -19,6 +19,7 @@ Customer Campaign Engine / CDP style feature platform demonstrating medallion da
 - CDC-to-online-feature-store simulation for real-time feature discussion
 - 480K-active-user AWS sizing and deployment notes
 - Big-data EMR / Delta extension notes for Spark synthetic data, Airflow orchestration and S3 lakehouse layout
+- Operations maturity and cost notes for realistic rollout constraints
 
 ## Architecture
 
@@ -90,6 +91,7 @@ Detailed architecture material:
 docs/REALTIME_FEATURE_PLATFORM_480K.md
 docs/ARCHITECTURE_MLOPS_GRAPHML_DEPLOYMENT.md
 docs/BIG_DATA_EMR_DELTA_EXTENSION.md
+docs/OPERATIONS_MATURITY_AND_COST.md
 ```
 
 ## Docker Run
@@ -109,7 +111,7 @@ The repository-level workflow is in:
 
 It installs dependencies, runs tests and builds Docker images for both PoCs.
 
-## Design Narrative
+## Design Notes
 
 This PoC is based on a customer campaign data platform. It separates raw ingestion, standardized identity and feature engineering into Bronze, Silver and Gold layers. The important design point is resolving scattered NRIC, FIN and Passport identifiers into a unified customer key before feature computation, then adding graph-style candidate matching for missing-ID records that need controlled review.
 

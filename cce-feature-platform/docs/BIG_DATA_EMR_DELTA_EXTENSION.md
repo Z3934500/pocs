@@ -14,7 +14,7 @@ This note explains how the existing CCE feature-platform PoC can be extended int
 | Deployment | Databricks job template, EKS manifests, Terraform templates | EMR Serverless for development, EMR on EKS for production-style Spark workloads |
 | Governance | Data quality issues, lineage endpoint, drift output | Adds data volume, freshness, partitioning, file layout, Glue catalog and Airflow SLA concerns |
 
-The two are complementary. CCE shows the business platform and serving architecture. The big-data extension shows how the same feature logic scales when the data is too large for a local Python pipeline.
+The local CCE implementation and the big-data extension have separate responsibilities. The local project keeps the domain model, identity resolution, feature serving and API flow easy to run. The big-data extension maps the same feature logic to distributed Spark jobs for larger datasets, backfills and scheduled batch windows.
 
 ## Synthetic Data Strategy
 
@@ -85,7 +85,7 @@ This should not replace `src/cce_platform/pipeline.py`. The local pipeline remai
 | EMR on EKS | Production-style Spark jobs in a Kubernetes estate | Reuses EKS operations, supports multiple Spark versions and can mix on-demand and Spot capacity. |
 | EMR on EC2 | Traditional managed Hadoop/Spark cluster | Useful when the team wants more direct cluster control. |
 
-A clean narrative is: local Python for explainability, Databricks for governed lakehouse/MLflow, and EMR on EKS or EMR Serverless when the discussion is AWS-native Spark operations.
+The operating model is: local Python for fast validation, Databricks for governed lakehouse and MLflow workflows, and EMR on EKS or EMR Serverless for AWS-native Spark operations.
 
 ## Capacity And Cost Model
 
@@ -101,15 +101,17 @@ The existing CCE sizing already covers Redis, MSK, Debezium, stream jobs and Fea
 
 For 480K active users, the online feature-store memory may still be modest, but the offline platform must handle historical events, replay, feature windows, model training sets and backfills. That is where Spark/Delta/Airflow becomes more important than the API code.
 
-## What To Supplement In The Repo
+## Repository Extension Artifacts
 
-The current CCE repo is already strong on business architecture, identity resolution, online serving and deployment shape. To make the big-data angle explicit, add these as optional artifacts:
+The base CCE project focuses on domain logic, identity resolution, online feature serving and deployment templates. The optional artifacts below keep the distributed Spark runtime separate from the local demo while documenting how the same pipeline runs at larger scale:
 
-1. Spark synthetic data generator for customers, identities, transactions, policies and CDC events.
-2. EMR/Delta job scripts that mirror the local Bronze -> Silver -> Gold pipeline.
-3. Airflow/MWAA DAG showing dependencies, retries, SLA and alert hooks.
-4. S3/Delta layout notes covering partitions, compaction, table history and replay.
-5. A capacity worksheet for 480K users: feature size, Redis memory, daily event volume, Spark input size and expected batch window.
-6. Data-governance checks that can run after each job: schema, freshness, volume, timestamp deviation, duplicate event and reconciliation.
+1. `deploy/emr_delta/0_generate_synthetic_data.py`: Spark synthetic data generator for customers, identities, transactions, policies and campaign events.
+2. `deploy/emr_delta/1_bronze_ingest.py` through `4_anomaly_detection.py`: EMR/Delta jobs that mirror the local Bronze -> Silver -> Gold flow.
+3. `deploy/airflow/cce_feature_pipeline_dag.py`: Airflow/MWAA DAG skeleton with dependencies, retries, execution timeout and EMR Serverless job submission.
+4. `deploy/emr_delta/README.md`: S3/Delta layout notes covering raw, Bronze, Silver, Gold, partitioning, replay and table registration.
+5. Capacity notes in this document and `REALTIME_FEATURE_PLATFORM_480K.md`: 480K-user feature size, Redis memory, daily event volume, Spark input size and batch-window considerations.
+6. `../data-governance-poc`: executable checks for schema, freshness, volume, timestamp deviation, duplicate events and reconciliation.
 
-The first practical step is to keep the existing CCE as-is and add the Spark/EMR extension under `deploy/emr_delta/`. That avoids mixing local demo code with distributed runtime code while still showing a complete big-data path.
+The boundary is intentional: `src/cce_platform/` remains the local runnable reference, while `deploy/emr_delta/` and `deploy/airflow/` describe the distributed runtime shape. This keeps laptop-friendly code separate from EMR/Airflow deployment artifacts.
+
+For rollout constraints, cost drivers and maturity gaps, see `OPERATIONS_MATURITY_AND_COST.md`.
