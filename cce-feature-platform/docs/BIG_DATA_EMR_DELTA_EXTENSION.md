@@ -63,6 +63,19 @@ cce-feature-platform/
 
 This should not replace `src/cce_platform/pipeline.py`. The local pipeline remains the runnable reference; the Spark scripts show the production-scale execution model.
 
+## Warehouse Layer Mapping
+
+The Spark/Delta extension uses the lakehouse Bronze -> Silver -> Gold naming, which maps closely to common warehouse layers:
+
+| Lakehouse layer | Warehouse layer | Purpose in this repo |
+| --- | --- | --- |
+| Raw landing | Source extract | Immutable files copied from CDC, API exports, synthetic generators or operational feeds |
+| Bronze | ODS / raw history | Preserve source shape, add ingest metadata, normalize timestamps and keep replayable records |
+| Silver | DWD / cleaned detail | Validate contracts, deduplicate events, resolve identities and build cleaned facts and dimensions |
+| Gold | DWS / DM / feature marts | Publish customer features, segments, eligibility outputs, anomaly results and dashboard-ready tables |
+
+This separation matters because the source of record is not always a clean analytical product. OLTP systems, IoT streams, Excel master data and vendor files may all be valid sources, but the lakehouse layers define where data becomes validated, versioned and safe for analytics or feature serving.
+
 ## Spark / Delta Design Points
 
 | Design point | Recommendation |

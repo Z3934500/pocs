@@ -40,6 +40,24 @@ OLAP usually uses star or snowflake models because query speed and business read
 - Snowflake model: dimensions are normalized further, such as `dim_sku -> dim_category -> dim_brand`. It reduces dimension duplication but adds joins.
 - Gold / feature tables: for dashboards or machine learning, data can be denormalized even more, such as daily OEE metrics or customer campaign features.
 
+## Sharding vs Warehouse Modeling
+
+OLTP sharding and OLAP warehouse modeling solve different layers of the system. Sharding or table-splitting is a physical routing strategy for transactional systems: it protects write throughput, point lookup latency and single-table capacity. A shard key, such as customer ID, order ID or phone hash, tells the application where the current record lives.
+
+Warehouse modeling is a logical analytical model. Fact tables, dimension tables, star schemas and snowflake schemas describe how historical business events should be queried, aggregated and replayed. OLAP partitions, such as `business_date` or `ingestion_date`, are designed for scan pruning, backfill and cost control, not for OLTP request routing.
+
+The two are upstream and downstream, not substitutes:
+
+```text
+OLTP sharded tables
+  -> CDC / Outbox / ETL / ELT
+  -> Bronze / ODS raw history
+  -> Silver / DWD cleaned facts and dimensions
+  -> Gold / DM feature tables, dashboards and ML datasets
+```
+
+A MySQL shard key should not automatically become a warehouse partition key. Likewise, a warehouse star schema should not be forced back into OLTP tables if it creates cross-shard joins or slow transactional writes.
+
 ## Time And Change Capture
 
 A key OLAP concern is not only what the value is now, but how it changed over time. OLTP tables often update the latest state in place: an order moves from `RESERVED` to `CONFIRMED`, a customer changes segment, or a SKU moves from available stock to reserved stock. OLAP needs to preserve those transitions so analysts can answer questions such as what the customer segment was at order time, how long inventory stayed reserved, or what stock looked like at the end of each day.

@@ -45,6 +45,29 @@ Operational capacity is not only CPU. For this feature platform, the main dimens
 | Network | CDC to MSK, stream job to Redis, API to Redis | Lag, timeout, retries, packet drops | Kafka bytes in/out, consumer lag, p95 network latency, retry count |
 | Storage | S3/Delta, MSK EBS, RocksDB PVC, logs | Small-file slowdown, I/O wait, full disk | S3 request rate, file count, EBS IOPS, PVC usage, compaction backlog |
 
+## Layered Troubleshooting
+
+Do not collapse every database problem into "high concurrency". Request rate, data volume, query shape and downstream lag are different failure modes.
+
+| Question | What it means | Typical fix |
+| --- | --- | --- |
+| Is QPS high? | Many requests arrive at the same time | Cache hot reads, scale API pods, tune connection pools, add replicas or shard OLTP writes |
+| Is one request slow? | A single query scans too much data or waits on IO | Add indexes, choose the right shard key, prune partitions, compact files or reduce shuffle |
+| Are connections piling up? | Slow requests occupy DB or service connections until queues form | Fix the slow query first, then tune pool sizes and timeouts |
+| Is the pipeline late? | CDC, Kafka, Spark or Airflow is not keeping up | Check consumer lag, broker throughput, Spark stages, retries and data-quality failures |
+
+Partitioning also means different things at different layers:
+
+| Layer | Mechanism | Main purpose | Typical key |
+| --- | --- | --- | --- |
+| OLTP physical scaling | Sharding or table-splitting | Spread writes, point lookups and storage across databases or tables | Stable routing key such as `customer_id`, `order_id` or phone hash |
+| OLTP local pruning | Database table partition | Reduce scan range inside one table or one database | Range or hash key that matches the transactional query |
+| Kafka / MSK | Topic partitions | Preserve per-key order and increase consumer parallelism | `unified_customer_key`, order ID or another event ordering key |
+| OLAP logical layout | Lakehouse or warehouse partition | Prune historical scans, control replay scope and reduce batch cost | `business_date`, `ingestion_date` or event date |
+| Delta / S3 file layout | File sizing, compaction and clustering | Avoid small files, reduce scanned bytes and speed up commits | Target file size plus clustering keys such as customer, policy or date |
+
+These choices are related, but they are not interchangeable. An OLTP shard key is a request-routing rule; an OLAP partition key is an analytical scan and replay rule.
+
 ## IO Impact And Troubleshooting
 
 IO often decides whether a large feature pipeline finishes in minutes or hours. CPU-heavy Spark code still waits when source disks, shuffle spill, Kafka broker storage or S3 object operations become the bottleneck.
