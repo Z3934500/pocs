@@ -45,6 +45,39 @@ Operational capacity is not only CPU. For this feature platform, the main dimens
 | Network | CDC to MSK, stream job to Redis, API to Redis | Lag, timeout, retries, packet drops | Kafka bytes in/out, consumer lag, p95 network latency, retry count |
 | Storage | S3/Delta, MSK EBS, RocksDB PVC, logs | Small-file slowdown, I/O wait, full disk | S3 request rate, file count, EBS IOPS, PVC usage, compaction backlog |
 
+## IO Impact And Troubleshooting
+
+IO often decides whether a large feature pipeline finishes in minutes or hours. CPU-heavy Spark code still waits when source disks, shuffle spill, Kafka broker storage or S3 object operations become the bottleneck.
+
+Illustrative 1 TB sequential read example:
+
+| Storage type | Approx sequential read throughput | Approx time for 1 TB | Random IO profile |
+| --- | ---: | ---: | --- |
+| HDD | 100 MB/s | ~2.8 hours | ~100 IOPS |
+| Enterprise SSD | 500 MB/s | ~34 minutes | ~50K IOPS |
+| NVMe SSD | 3 GB/s | ~5.7 minutes | ~500K IOPS |
+| S3 Standard | Depends on object size, prefix layout and parallelism | Depends on request pattern | Watch request rate, throttling and 5xx errors |
+
+The exact numbers vary by cloud, instance type, file size, parallelism and storage configuration. The design point is stable: a pipeline that looks compute-bound can actually be blocked by read/write throughput, random IO, small files or request throttling.
+
+Feature-platform IO chain:
+
+| Stage | IO pattern | Bottleneck signal | What to watch |
+| --- | --- | --- | --- |
+| CDC source | Many small transactions and binlog reads | Source lag, disk wait, replication delay | `iostat -x 1`, read/write IOPS, DB replication lag |
+| Kafka / MSK | Sequential append to broker logs | Broker disk utilization, under-replicated partitions, producer latency | broker bytes in/out, disk throughput, average write size, consumer lag |
+| Spark shuffle | Stage-to-stage spill, read and write | Long shuffle stages, executor spill, skewed partitions | Spark UI shuffle read/write, spill bytes, task skew, executor disk usage |
+| Delta Lake / S3 | Parquet writes plus transaction log updates | Small-file buildup, slow commits, S3 throttling | file count, average file size, commit duration, S3 5xx/throttling metrics |
+| Feature API | Mostly memory and network reads | Redis latency, API p95, network timeout | Redis p95 latency, cache hit rate, API p95, network retries |
+
+Troubleshooting order:
+
+1. Check whether the job is compute-bound or waiting on IO: CPU utilization, executor wait time, disk wait and shuffle spill.
+2. Check partitioning and file layout: too many tiny files can make S3/Delta slow even when total data volume is moderate.
+3. Check shuffle size and skew: one hot customer, product or date partition can dominate the batch window.
+4. Check broker and source lag: CDC may be delayed before Spark sees the data.
+5. Check serving path separately: Redis and Feature API latency are usually memory/network issues, not disk IO issues.
+
 ## Cost Model
 
 The cost model has fixed and variable parts.
