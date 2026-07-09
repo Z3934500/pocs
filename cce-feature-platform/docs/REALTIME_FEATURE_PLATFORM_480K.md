@@ -75,7 +75,23 @@ CAS / EDL / transaction landing
 
 Partition strategy: hash by `unified_customer_key`. This keeps each customer's event ordering on the same Kafka partition and avoids cross-partition state merges for velocity and intent features.
 
-## 3. Repository Artifacts
+## 3. Operating Model
+
+The real-time and big-data paths are complementary:
+
+| Path | Responsibility | Runtime | Output |
+| --- | --- | --- | --- |
+| Big-data / batch | Build the trusted historical baseline | Databricks, Spark, Delta, EMR, Airflow | T+1 features, segments, model scores, anomaly tables |
+| Real-time / streaming | Apply low-latency incremental updates | Debezium, MSK, stream job, Redis | intent, velocity and recent activity features |
+| Online serving | Serve a combined feature view | Redis, FastAPI, EKS HPA | feature lookup and campaign eligibility |
+
+The big-data path is optimized for correctness, replay and full-history processing. The real-time path is optimized for latency, ordering and incremental updates. Redis and the Feature API are the convergence point.
+
+This document describes a target operating model. Real environments may be less mature: API logic, batch jobs and reporting tables may still be coupled; source systems may expose fields whose business meaning is ambiguous; and some source databases may not support analytical rules such as historical discount calculations. Those gaps should be handled with data contracts, rejected-row handling, reconciliation and an anti-corruption layer between OLTP sources and analytical consumers.
+
+For cost drivers, operational maturity and rollout constraints, see `OPERATIONS_MATURITY_AND_COST.md`.
+
+## 4. Repository Artifacts
 
 | Path | Purpose |
 | --- | --- |
@@ -91,7 +107,7 @@ Partition strategy: hash by `unified_customer_key`. This keeps each customer's e
 | `deploy/msk/debezium-mysql-connector.json` | MSK Connect Debezium MySQL connector template. |
 | `deploy/terraform` | MSK and ElastiCache sizing template. |
 
-## 4. Local POC Step-by-Step
+## 5. Local POC Step-by-Step
 
 Run from `pocs/cce-feature-platform`.
 
@@ -139,9 +155,9 @@ GET /api/data-quality/issues
 GET /api/lineage
 ```
 
-## 5. Production Deployment Step-by-Step
+## 6. Production Deployment Step-by-Step
 
-### 5.1 Build and Publish Images
+### 6.1 Build and Publish Images
 
 ```powershell
 docker build -t <account>.dkr.ecr.ap-southeast-1.amazonaws.com/cce-feature-platform:2026.06 .
@@ -150,7 +166,7 @@ docker push <account>.dkr.ecr.ap-southeast-1.amazonaws.com/cce-feature-platform:
 
 For the production stream job, build a dedicated image containing the Kafka Streams application and set it in `deploy/k8s/stream-statefulset.yaml`.
 
-### 5.2 Provision AWS Managed Services
+### 6.2 Provision AWS Managed Services
 
 ```powershell
 cd deploy/terraform
@@ -168,7 +184,7 @@ Promotion defaults:
 - Redis: `cache.m6g.large`, 1 primary + 1 replica, Multi-AZ.
 - Region: `ap-southeast-1` for Singapore deployment story.
 
-### 5.3 Create Kafka Topics
+### 6.3 Create Kafka Topics
 
 ```powershell
 kafka-topics.sh --bootstrap-server <msk-bootstrap> --create --topic cce.rds.orders --partitions 6 --replication-factor 3
@@ -176,7 +192,7 @@ kafka-topics.sh --bootstrap-server <msk-bootstrap> --create --topic cce.rds.cart
 kafka-topics.sh --bootstrap-server <msk-bootstrap> --create --topic schema-history.cce.rds.mysql --partitions 1 --replication-factor 3
 ```
 
-### 5.4 Deploy Debezium Connector
+### 6.4 Deploy Debezium Connector
 
 Use `deploy/msk/debezium-mysql-connector.json` as the MSK Connect connector template.
 
@@ -187,7 +203,7 @@ Important production settings:
 - `message.key.columns`: customer identifier or unified key when available.
 - Offset and schema history topics use replication factor 3 outside PoC.
 
-### 5.5 Deploy EKS Workloads
+### 6.5 Deploy EKS Workloads
 
 ```powershell
 kubectl create namespace cce-platform
@@ -208,7 +224,7 @@ cce-feature-platform-secrets
   databricks-token
 ```
 
-### 5.6 Operate and Monitor
+### 6.6 Operate and Monitor
 
 | Area | Metric |
 | --- | --- |
@@ -219,11 +235,11 @@ cce-feature-platform-secrets
 | Stream job | consumer lag, RocksDB state size, rebalance count, checkpoint/restart time |
 | Databricks | job duration, late data count, Silver DQ rejects, Gold row count |
 
-## 6. Design Narrative
+## 7. Design Notes
 
 Summary:
 
-> Based on the rollout estimate of 20K active users during MVP and 480K active users after promotion, I separated T+1 batch features from real-time intent features. Databricks computes heavy Bronze/Silver/Gold features and segmentation, then an EKS CronJob syncs Gold features into Redis. For low-latency updates, Debezium captures MySQL order and cart changes into MSK, and an EKS stream job updates Redis within seconds. The Feature API reads from Redis, so downstream campaign tools do not join against transactional RDS.
+> The platform separates T+1 batch features from real-time intent features. Databricks or EMR computes Bronze/Silver/Gold features and segmentation, then an EKS CronJob syncs Gold features into Redis. For low-latency updates, Debezium captures MySQL order and cart changes into MSK, and an EKS stream job updates Redis within seconds. The Feature API reads from Redis, so downstream campaign tools do not join against transactional RDS.
 
 Detailed bullets:
 
@@ -234,7 +250,7 @@ Detailed bullets:
 - CDC: MSK Connect runs Debezium for MySQL binlog capture on orders and cart tables; initial `tasks.max=1` is enough for the estimated 16.7 events/sec average and preserves simple ordering.
 - Identity: NRIC/FIN/Passport are normalized in Silver and resolved to `unified_customer_key` before both batch and real-time feature calculation.
 
-## 7. Implementation Mapping
+## 8. Implementation Mapping
 
 | Capability | Concrete implementation |
 | --- | --- |
@@ -245,11 +261,11 @@ Detailed bullets:
 | Real-time segmentation platform | Spark/Gold segmentation provides baseline segments; stream features add current intent and velocity for downstream campaign decisions. |
 | All components run on EKS, Terraform, CI images | K8s manifests, HPA, StatefulSet, CronJob and Terraform templates show the deployment path. |
 
-## 8. Scope Statement
+## 9. Scope Statement
 
 This repository is intentionally a compact reference PoC. It demonstrates architecture, data contracts, deployment shape and sizing rationale. In a production implementation, the local JSON online store becomes ElastiCache Redis, the JSONL CDC sample becomes Debezium topics on MSK, and the local Python pipeline maps to Databricks Delta jobs.
 
-## 9. AWS Reference Links
+## 10. AWS Reference Links
 
 - Amazon ElastiCache supported node types: https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/CacheNodes.SupportedTypes.html
 - Amazon MSK broker sizes: https://docs.aws.amazon.com/msk/latest/developerguide/broker-instance-sizes.html
