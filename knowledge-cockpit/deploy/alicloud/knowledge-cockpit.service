@@ -1,0 +1,22 @@
+[Unit]
+Description=PoC Knowledge Cockpit
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=knowledge
+Group=knowledge
+WorkingDirectory=/opt/pocs
+EnvironmentFile=/etc/knowledge-cockpit.env
+ExecStart=/usr/bin/python3 /opt/pocs/knowledge-cockpit/server.py --host 127.0.0.1 --port 8088
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/opt/pocs
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,17 @@
+# Optional named-tunnel example for /etc/cloudflared/config.yml.
+# If you created the tunnel in the Cloudflare Zero Trust dashboard and installed it
+# with `cloudflared service install <TOKEN>`, you usually configure the public
+# hostname in the dashboard instead of using this file.
+
+# tunnel: <tunnel-id-or-name>
+# credentials-file: /etc/cloudflared/<tunnel-id>.json
+
+ingress:
+  # Route the public hostname to local Nginx on ECS.
+  # Nginx then forwards /knowledge-cockpit/ and /knowledge-cockpit/api/
+  # to the Python service on 127.0.0.1:8088.
+  - hostname: your-own-domain.example
+    service: http://localhost:80
+
+  # Required catch-all rule.
+  - service: http_status:404
