@@ -36,7 +36,7 @@ In simple Automation terms:
 
 ## Data Relevant Topics
 
-The longer Data-direction explanation now lives in [Relevant Data Terminology](docs/RELEVANT_DATA_TERMINOLOGY.md). GitHub README files support expandable sections through HTML `details` blocks, so the summary below stays compact while still being available from the landing page.
+The longer Data-direction explanation now lives in [Relevant Data Terminology](docs/RELEVANT_DATA_TERMINOLOGY.md). 
 
 <details>
 <summary><strong>Data Relevant Topics</strong></summary>
