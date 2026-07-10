@@ -135,7 +135,7 @@ Use `oee-data-platform` for industrial equipment, mining, manufacturing or opera
 
 Use `cce-feature-platform` for customer data platform topics: Bronze -> Silver -> Gold modeling, identity resolution, feature serving and downstream campaign activation. For real-time CDC, Kafka, Redis and EKS sizing, see `cce-feature-platform/docs/REALTIME_FEATURE_PLATFORM_480K.md`. For Spark synthetic data, EMR/Delta, S3 layout and Airflow orchestration, see `cce-feature-platform/docs/BIG_DATA_EMR_DELTA_EXTENSION.md`. For the LLM/vector DB extension over existing MLOps, see `cce-feature-platform/docs/AI_VECTOR_DB_EXTENSION.md`.
 
-Use [Z3934500/KB](https://github.com/Z3934500/KB) when discussing enterprise knowledge-base automation: lightweight S3 + Bedrock Knowledge Bases, medium RAG with explicit vector DB, fine-tuning and private runtime trade-offs, VPC design, and Jenkins/GitLab deployment options.
+Use [KB](https://github.com/Z3934500/KB) when discussing enterprise knowledge-base automation: lightweight S3 + Bedrock Knowledge Bases, medium RAG with explicit vector DB, fine-tuning and private runtime trade-offs, VPC design, and Jenkins/GitLab deployment options.
 
 ## Presenter Knowledge Cockpit
 
