@@ -17,6 +17,9 @@ CAS / AJO / policy admin / RDS events
        - propensity model run metadata
        - customer model scores
        - feature drift metrics
+  -> optional AI vector DB extension
+       - customer / offer / document embeddings
+       - retrieval-aware best-offer context for LLM orchestration
   -> EKS CronJob sync
   -> Redis online feature store
   -> EKS FastAPI Feature API with HPA
@@ -30,6 +33,7 @@ CAS / AJO / policy admin / RDS events
 | Offline ETL and feature engineering | Databricks Spark + Delta | Best fit for Bronze/Silver/Gold joins, T+1 feature computation, lineage and backfills. |
 | Feature governance | Unity Catalog / Delta tables | Central place for ownership, column permissions, PII masking and table lineage. |
 | Model training and registry | Databricks MLflow | Records feature version, run parameters, metrics, model version and promotion status. |
+| AI retrieval extension | pgvector, OpenSearch or Bedrock Knowledge Bases | Adds semantic retrieval over customer features, offer/product context and model explanation material for LLM-assisted best-offer use cases. |
 | Online feature serving | EKS FastAPI + Redis | Low-latency reads, API-level authorization, stable request contracts and HPA-based scaling. |
 | Real-time updates | Debezium + MSK + EKS stream job | Keeps RDS isolated while updating intent/velocity features within seconds. |
 | Identity resolution | Deterministic rules + GraphML-style similarity | Exact IDs remain authoritative; graph candidates catch same-person records when IDs are missing or inconsistent. |
@@ -91,6 +95,12 @@ customer_policy:{unified_customer_key}:{policy_id}:features
 | `src/cce_platform/api.py` | Feature API, identity candidate API and MLOps drift/model-run API. |
 | `deploy/databricks/cce_medallion_job.py` | Spark/Delta/MLflow version of the same architecture. |
 | `deploy/k8s/*.yaml` | EKS API, HPA, stream job, Gold-to-Redis importer and MLOps monitor. |
+
+Optional LLM/vector retrieval extension:
+
+| Path | Purpose |
+| --- | --- |
+| `docs/AI_VECTOR_DB_EXTENSION.md` | Adds vector DB, embedding sync, Bedrock orchestration, fallback and retrieval-aware MLOps notes. |
 
 ## Local Run
 

@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#0f766e" />
+    <title>PoC Knowledge Cockpit</title>
+
+    <link rel="manifest" href="manifest.webmanifest" />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body class="role-screen">
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">KC</div>
+          <div>
+            <h1>Knowledge Cockpit</h1>
+            <p>Presenter control for the PoC repo</p>
+          </div>
+        </div>
+
+        <nav class="nav-tabs" aria-label="Views">
+          <button class="nav-tab active" data-view="map">Story Map</button>
+          <button class="nav-tab" data-view="explore">Explore</button>
+          <button class="nav-tab" data-view="script">Demo Script</button>
+          <button class="nav-tab" data-view="qa">Q&amp;A</button>
+          <button class="nav-tab" data-view="graph">Graph</button>
+          <button class="nav-tab private-only" data-view="ai">AI KB</button>
+        </nav>
+
+        <div class="remote-panel">
+          <label for="sessionInput">Remote Session</label>
+          <input id="sessionInput" type="text" value="demo" />
+          <div class="role-toggle">
+            <button class="role-button active" data-role="screen">Screen</button>
+            <button class="role-button" data-role="remote">Presenter</button>
+          </div>
+          <div class="pin-panel private-only">
+            <label for="presenterPinInput">Presenter PIN</label>
+            <div class="pin-row">
+              <input id="presenterPinInput" type="password" placeholder="Only on your phone" autocomplete="current-password" />
+              <button class="role-button" id="unlockButton" type="button">Unlock</button>
+            </div>
+          </div>
+          <p id="syncStatus">Static mode</p>
+        </div>
+
+        <div class="search-panel">
+          <label for="searchInput">Search</label>
+          <input id="searchInput" type="search" placeholder="OLTP, SCD, partition..." />
+        </div>
+
+        <div class="category-panel" id="categoryPanel"></div>
+      </aside>
+
+      <main class="workspace">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Data Engineering PoCs</p>
+            <h2 id="viewTitle">Story Map</h2>
+          </div>
+          <div class="topbar-actions">
+            <button class="icon-button" id="installButton" title="Install on this device">Install</button>
+            <button class="icon-button private-only" id="copyNotesButton" title="Copy presenter notes">Copy</button>
+          </div>
+        </header>
+
+        <section class="view active" id="mapView">
+          <div class="story-hero">
+            <div>
+              <p class="eyebrow" id="storyDeckLabel">2 Original + 2 Refactor + 5 Extension</p>
+              <h3 id="storyHeadline">Project narrative map</h3>
+              <p class="muted" id="storyIntro">Original project baselines expand into runnable refactors and platform extensions.</p>
+            </div>
+            <div class="story-metrics" aria-label="Story counts">
+              <div><strong>2</strong><span>Original</span></div>
+              <div><strong>2</strong><span>Refactor</span></div>
+              <div><strong>5</strong><span>Extension</span></div>
+            </div>
+          </div>
+          <div class="story-layout">
+            <div class="story-groups" id="storyGroups"></div>
+            <article class="detail-panel story-detail" id="storyDetail"></article>
+          </div>
+        </section>
+        <section class="view" id="exploreView">
+          <div class="term-grid" id="termGrid"></div>
+        </section>
+
+        <section class="view" id="scriptView">
+          <div class="script-layout">
+            <div class="script-list" id="scriptList"></div>
+            <article class="detail-panel" id="scriptDetail"></article>
+          </div>
+        </section>
+
+        <section class="view" id="qaView">
+          <div class="qa-list" id="qaList"></div>
+        </section>
+
+        <section class="view" id="graphView">
+          <div class="graph-panel">
+            <div class="graph-map" id="graphMap"></div>
+          </div>
+        </section>
+
+        <section class="view" id="aiView">
+          <div class="ai-layout">
+            <div class="ai-composer">
+              <label for="aiQuestion">Ask the repo knowledge base</label>
+              <textarea id="aiQuestion" rows="5" placeholder="Ask about OLTP vs OLAP, SCD, sharding, data contracts, EMR/Delta, operations..."></textarea>
+              <div class="ai-actions">
+                <button class="icon-button primary" id="askAiButton">Ask AI</button>
+                <button class="icon-button voice-button" id="voiceButton" type="button" title="Hold to speak">Voice</button>
+                <button class="icon-button" id="useCurrentContextButton">Use Current Topic</button>
+              </div>
+              <p class="muted" id="aiStatus">Requires the local server and OPENAI_API_KEY.</p>
+            </div>
+            <article class="ai-answer" id="aiAnswer">
+              <p class="muted">Answers will use repo-local retrieval and cite the source files used.</p>
+            </article>
+          </div>
+        </section>
+      </main>
+
+      <aside class="presenter-panel private-only">
+        <div class="panel-header">
+          <p class="eyebrow">Presenter Notes</p>
+          <h3 id="selectedTitle">OLTP</h3>
+        </div>
+        <div id="selectedDetail"></div>
+      </aside>
+    </div>
+
+    <script src="data.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>

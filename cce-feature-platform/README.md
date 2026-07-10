@@ -19,6 +19,7 @@ Customer Campaign Engine / CDP style feature platform demonstrating medallion da
 - CDC-to-online-feature-store simulation for real-time feature discussion
 - 480K-active-user AWS sizing and deployment notes
 - Big-data EMR / Delta extension notes for Spark synthetic data, Airflow orchestration and S3 lakehouse layout
+- AI vector DB extension notes for LLM-assisted best offer, product/offer RAG and retrieval-aware MLOps
 - Operations maturity and cost notes for realistic rollout constraints
 
 ## Architecture
@@ -91,6 +92,7 @@ Detailed architecture material:
 docs/REALTIME_FEATURE_PLATFORM_480K.md
 docs/ARCHITECTURE_MLOPS_GRAPHML_DEPLOYMENT.md
 docs/BIG_DATA_EMR_DELTA_EXTENSION.md
+docs/AI_VECTOR_DB_EXTENSION.md
 docs/OPERATIONS_MATURITY_AND_COST.md
 ```
 
@@ -115,4 +117,4 @@ It installs dependencies, runs tests and builds Docker images for both PoCs.
 
 This PoC is based on a customer campaign data platform. It separates raw ingestion, standardized identity and feature engineering into Bronze, Silver and Gold layers. The important design point is resolving scattered NRIC, FIN and Passport identifiers into a unified customer key before feature computation, then adding graph-style candidate matching for missing-ID records that need controlled review.
 
-Databricks owns offline customer/policy features, MLflow model runs and drift monitoring. EKS and Redis own the online Feature API, HPA scaling, request-time authorization and low-latency campaign serving. This keeps transactional RDS and Databricks workloads isolated from campaign lookup traffic while still giving the models governed features.
+Databricks owns offline customer/policy features, MLflow model runs and drift monitoring. EKS and Redis own the online Feature API, HPA scaling, request-time authorization and low-latency campaign serving. The optional AI vector DB extension adds semantic retrieval over customer features, product/offer documents and similar-customer context for Bedrock/LLM best-offer generation, while Redis remains the deterministic fallback path. This keeps transactional RDS and Databricks workloads isolated from campaign lookup traffic while still giving the models governed features.

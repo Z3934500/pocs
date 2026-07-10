@@ -1,11 +1,26 @@
-# Data Engineering PoCs
+# Yutong Zhang Delivery Portfolio PoCs
 
-This folder contains compact proof-of-concept projects that explain the full data lifecycle: OLTP systems do the business work, OLAP systems read the history, and CDC / Kafka / Outbox patterns connect the two.
+This repository supports the delivery portfolio behind `your-own-domain.example`. It is no longer only a Data Engineering PoC set; it is organized as two practical consulting/delivery directions: **Data** and **Automation**.
 
-In simple terms:
+## Portfolio Directions
+
+| Direction | What it proves | Representative PoCs |
+| --- | --- | --- |
+| Data | OLTP/OLAP boundaries, CDC, data contracts, medallion modeling, feature platforms and MLOps | `oms-oltp-poc`, `inventory-oms-poc`, `data-governance-poc`, `oee-data-platform`, `cce-feature-platform` |
+| Automation | Enterprise knowledge operations, GenAI/RAG, CI/CD, VPC delivery patterns and workflow automation | [`corporate-knowledge-base-poc`](corporate-knowledge-base-poc/README.md), `knowledge-cockpit` |
+| Presenter / Website | Demo control, narrative handoff and deployable public-facing explanation | `knowledge-cockpit`, `your-own-domain.example` deployment notes |
+
+The Data direction explains how business systems produce reliable analytical and ML-ready data. The Automation direction explains how cloud-native delivery, AI and CI/CD reduce repeated manual work and package enterprise knowledge into operated workflows.
+
+In simple Data terms:
 
 - OLTP is the system that does the work: place order, reserve stock, capture payment, cancel booking.
 - OLAP is the system that looks at the numbers: sales trend, OEE dashboard, customer features, inventory turnover forecast.
+
+In simple Automation terms:
+
+- RAG is the system that searches governed knowledge first, then asks the LLM to answer with evidence.
+- CI/CD is the system that turns app, infrastructure, prompt and evaluation changes into controlled releases.
 
 ## Projects
 
@@ -16,6 +31,8 @@ In simple terms:
 | `data-governance-poc` | Data governance / Data SRE | Executable contracts, freshness, drift and reconciliation checks | Monitors the OMS Outbox and inventory state so downstream OLAP tables and ML features are trustworthy |
 | `oee-data-platform` | OLAP | Industrial equipment analytics, medallion data platform | Multi-site OEE ingestion, schema standardization, data quality, anomaly detection and dashboard |
 | `cce-feature-platform` | OLAP + online serving | Databricks ETL, customer features, real-time feature store | Customer Campaign Engine / CDP style platform with identity resolution, segmentation, eligibility, API consumption and [big-data EMR/Delta extension](cce-feature-platform/docs/BIG_DATA_EMR_DELTA_EXTENSION.md) |
+| [`corporate-knowledge-base-poc`](corporate-knowledge-base-poc/README.md) | GenAI automation | Enterprise RAG knowledge base | Standalone repo pointer for the lightweight S3 + Bedrock path, medium vector DB path, fine-tuning/private-runtime path, VPC diagrams and Jenkins/GitLab deployment trade-offs |
+| `knowledge-cockpit` | Presenter / website | Demo control panel and AI KB shell | Installable PWA, phone remote control, presenter notes, repo Q&A and deployment path for `your-own-domain.example` |
 
 ## OLTP vs OLAP
 
@@ -116,6 +133,26 @@ Use `data-governance-poc` when discussing executable data contracts, data qualit
 
 Use `oee-data-platform` for industrial equipment, mining, manufacturing or operations analytics discussions.
 
-Use `cce-feature-platform` for customer data platform topics: Bronze -> Silver -> Gold modeling, identity resolution, feature serving and downstream campaign activation. For real-time CDC, Kafka, Redis and EKS sizing, see `cce-feature-platform/docs/REALTIME_FEATURE_PLATFORM_480K.md`. For Spark synthetic data, EMR/Delta, S3 layout and Airflow orchestration, see `cce-feature-platform/docs/BIG_DATA_EMR_DELTA_EXTENSION.md`.
+Use `cce-feature-platform` for customer data platform topics: Bronze -> Silver -> Gold modeling, identity resolution, feature serving and downstream campaign activation. For real-time CDC, Kafka, Redis and EKS sizing, see `cce-feature-platform/docs/REALTIME_FEATURE_PLATFORM_480K.md`. For Spark synthetic data, EMR/Delta, S3 layout and Airflow orchestration, see `cce-feature-platform/docs/BIG_DATA_EMR_DELTA_EXTENSION.md`. For the LLM/vector DB extension over existing MLOps, see `cce-feature-platform/docs/AI_VECTOR_DB_EXTENSION.md`.
+
+Use [`corporate-knowledge-base-poc`](corporate-knowledge-base-poc/README.md) when discussing enterprise knowledge-base automation. The implementation has moved to its own KB repo; this workspace keeps a pointer for the lightweight S3 + Bedrock Knowledge Bases path, medium RAG with explicit vector DB, fine-tuning and private runtime trade-offs, VPC design, and Jenkins/GitLab deployment options.
+
+## Presenter Knowledge Cockpit
+
+Use [`knowledge-cockpit`](knowledge-cockpit/README.md) as a live demo control panel for this repository. It provides an installable PWA shell, searchable terminology cards, prepared Q&A, a demo script, presenter notes, phone remote-control sessions, repo evidence links and AI knowledge-base answers through `server.py`.
+
+Local run:
+
+```powershell
+python -m http.server 8088
+```
+
+Then open:
+
+```text
+http://localhost:8088/knowledge-cockpit/
+```
+
+Deployment steps are in [`knowledge-cockpit/DEPLOYMENT.md`](knowledge-cockpit/DEPLOYMENT.md).
 
 All PoCs are intentionally compact. They prioritize runnable architecture and engineering patterns over pretending to be full production implementations.
