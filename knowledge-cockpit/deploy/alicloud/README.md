@@ -50,14 +50,14 @@ With Cloudflare Tunnel, Alibaba Cloud Security Group does not need inbound `80` 
 
 On ECS, choose one path. This runbook uses `/opt/pocs`.
 
-Repository: [Z3934500/pocs](https://github.com/Z3934500/pocs)
+Repository: [your-org-or-user/pocs](https://github.com/<your-org-or-user>/pocs)
 
 Using git:
 
 ```bash
 sudo mkdir -p /opt
 cd /opt
-sudo git clone https://github.com/Z3934500/pocs.git pocs
+sudo git clone https://github.com/<your-org-or-user>/pocs.git pocs
 sudo chown -R "$USER:$USER" /opt/pocs
 ```
 

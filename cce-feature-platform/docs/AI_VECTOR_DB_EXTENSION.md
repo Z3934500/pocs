@@ -300,8 +300,8 @@ BIG_DATA_EMR_DELTA_EXTENSION.md
 OPERATIONS_MATURITY_AND_COST.md
 ```
 
-For a standalone enterprise document knowledge base, see the KB repo pointer:
+For a standalone enterprise document knowledge base, see the KB repo:
 
 ```text
-../../corporate-knowledge-base-poc/README.md
+https://github.com/Z3934500/KB
 ```

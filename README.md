@@ -1,14 +1,14 @@
-# Yutong Zhang Delivery Portfolio PoCs
+# Delivery Portfolio PoC
 
-This repository supports the delivery portfolio behind `your-own-domain.example`. It is no longer only a Data Engineering PoC set; it is organized as two practical consulting/delivery directions: **Data** and **Automation**.
+This repository supports the delivery portfolio behind my website. It is organized as two practical consulting/delivery directions: **Data** and **Automation**.
 
 ## Portfolio Directions
 
 | Direction | What it proves | Representative PoCs |
 | --- | --- | --- |
 | Data | OLTP/OLAP boundaries, CDC, data contracts, medallion modeling, feature platforms and MLOps | `oms-oltp-poc`, `inventory-oms-poc`, `data-governance-poc`, `oee-data-platform`, `cce-feature-platform` |
-| Automation | Enterprise knowledge operations, GenAI/RAG, CI/CD, VPC delivery patterns and workflow automation | [`corporate-knowledge-base-poc`](corporate-knowledge-base-poc/README.md), `knowledge-cockpit` |
-| Presenter / Website | Demo control, narrative handoff and deployable public-facing explanation | `knowledge-cockpit`, `your-own-domain.example` deployment notes |
+| Automation | Enterprise knowledge operations, GenAI/RAG, CI/CD, VPC delivery patterns and workflow automation | [Z3934500/KB](https://github.com/Z3934500/KB), `knowledge-cockpit` |
+| Presenter / Website | Demo control, narrative handoff and deployable public-facing explanation | `knowledge-cockpit`, `your own domain` deployment notes |
 
 The Data direction explains how business systems produce reliable analytical and ML-ready data. The Automation direction explains how cloud-native delivery, AI and CI/CD reduce repeated manual work and package enterprise knowledge into operated workflows.
 
@@ -31,10 +31,10 @@ In simple Automation terms:
 | `data-governance-poc` | Data governance / Data SRE | Executable contracts, freshness, drift and reconciliation checks | Monitors the OMS Outbox and inventory state so downstream OLAP tables and ML features are trustworthy |
 | `oee-data-platform` | OLAP | Industrial equipment analytics, medallion data platform | Multi-site OEE ingestion, schema standardization, data quality, anomaly detection and dashboard |
 | `cce-feature-platform` | OLAP + online serving | Databricks ETL, customer features, real-time feature store | Customer Campaign Engine / CDP style platform with identity resolution, segmentation, eligibility, API consumption and [big-data EMR/Delta extension](cce-feature-platform/docs/BIG_DATA_EMR_DELTA_EXTENSION.md) |
-| [`corporate-knowledge-base-poc`](corporate-knowledge-base-poc/README.md) | GenAI automation | Enterprise RAG knowledge base | Standalone repo pointer for the lightweight S3 + Bedrock path, medium vector DB path, fine-tuning/private-runtime path, VPC diagrams and Jenkins/GitLab deployment trade-offs |
-| `knowledge-cockpit` | Presenter / website | Demo control panel and AI KB shell | Installable PWA, phone remote control, presenter notes, repo Q&A and deployment path for `your-own-domain.example` |
+| [Z3934500/KB](https://github.com/Z3934500/KB) | GenAI automation | Enterprise RAG knowledge base | Standalone repo for the lightweight S3 + Bedrock path, medium vector DB path, fine-tuning/private-runtime path, VPC diagrams and Jenkins/GitLab deployment trade-offs |
+| `knowledge-cockpit` | Presenter / website | Demo control panel and AI KB shell | Installable PWA, phone remote control, presenter notes, repo Q&A and deployment path for your own domain |
 
-## OLTP vs OLAP
+### OLTP vs OLAP
 
 | Dimension | OLTP: operational system | OLAP: analytical system |
 | --- | --- | --- |
@@ -47,7 +47,7 @@ In simple Automation terms:
 | Storage model | Row-store such as MySQL or PostgreSQL | Column-store or lakehouse such as ClickHouse, Doris, Delta or Parquet |
 | Data modeling | 3NF, less redundancy, safer writes | Star / snowflake / wide tables, more redundancy, faster reads |
 
-## Modeling Guide
+### Modeling Guide
 
 OLTP usually uses 3NF because write correctness matters most. For example, `oms-oltp-poc` keeps `orders`, `order_items`, `payments`, `sku_inventory` and `inventory_reservations` separate. This reduces duplicated facts and makes updates safer inside one transaction.
 
@@ -57,7 +57,7 @@ OLAP usually uses star or snowflake models because query speed and business read
 - Snowflake model: dimensions are normalized further, such as `dim_sku -> dim_category -> dim_brand`. It reduces dimension duplication but adds joins.
 - Gold / feature tables: for dashboards or machine learning, data can be denormalized even more, such as daily OEE metrics or customer campaign features.
 
-## Sharding vs Warehouse Modeling
+### Sharding vs Warehouse Modeling
 
 OLTP sharding and OLAP warehouse modeling solve different layers of the system. Sharding or table-splitting is a physical routing strategy for transactional systems: it protects write throughput, point lookup latency and single-table capacity. A shard key, such as customer ID, order ID or phone hash, tells the application where the current record lives.
 
@@ -75,7 +75,7 @@ OLTP sharded tables
 
 A MySQL shard key should not automatically become a warehouse partition key. Likewise, a warehouse star schema should not be forced back into OLTP tables if it creates cross-shard joins or slow transactional writes.
 
-## Time And Change Capture
+### Time And Change Capture
 
 A key OLAP concern is not only what the value is now, but how it changed over time. OLTP tables often update the latest state in place: an order moves from `RESERVED` to `CONFIRMED`, a customer changes segment, or a SKU moves from available stock to reserved stock. OLAP needs to preserve those transitions so analysts can answer questions such as what the customer segment was at order time, how long inventory stayed reserved, or what stock looked like at the end of each day.
 
@@ -88,7 +88,7 @@ This is where event history, CDC, snapshots and slowly changing dimensions matte
 
 So OLTP protects the current truth; OLAP preserves the timeline of truth.
 
-## Data Contracts And Lakehouse Governance
+### Data Contracts And Lakehouse Governance
 
 The metadata story can be summarized as three layers:
 
@@ -102,11 +102,11 @@ For OLTP, idempotency usually prevents duplicate commands, such as retrying the 
 
 The runnable version of this idea is `data-governance-poc`: it turns the contract into SRE-style checks for schema drift, payload shape, freshness, pending lag, timestamp deviation, duplicate semantic events and inventory reconciliation.
 
-## HTAP Note
+### HTAP Note
 
 Modern databases increasingly advertise HTAP, meaning one engine can support both transactional and analytical workloads. In real production architecture, teams still usually separate hot writes from heavy reads through read replicas, CDC, Kafka, materialized views, lakehouse tables or dedicated OLAP stores. The reason is practical: checkout traffic and large dashboard scans should not slow each other down.
 
-## Spring Boot Original vs Python Companion
+#### Spring Boot Original vs Python Companion
 
 The original `inventory-oms-poc` should be kept as the Spring Boot / Java reference. It is closer to a production enterprise microservice stack, especially when the discussion is about Spring Boot controllers, services, repositories, Maven modules, DDD tactical patterns and a Java team delivery model.
 
@@ -119,7 +119,7 @@ The new `oms-oltp-poc` is a Python companion version, not a replacement. It exis
 
 The two versions should be compared, not collapsed into one. Spring Boot is the stronger reference for production Java service implementation and DDD-style microservice boundaries. Python is the stronger reference for compact architecture explanation, local tests and side-by-side comparison with OEE / CCE.
 
-### Microservices And DDD
+#### Microservices And DDD
 
 Microservices and DDD fit this OMS story well because each service can align to a bounded context: Order, Inventory, Payment, Fulfillment and Notification. Inside the Order context, `Order` can be the aggregate root, `OrderItem` belongs inside the aggregate, repositories persist aggregates, domain services enforce cross-aggregate rules, and domain events such as `order.created`, `inventory.reserved` and `order.confirmed` become the clean handoff to Kafka / Outbox.
 
@@ -135,7 +135,7 @@ Use `oee-data-platform` for industrial equipment, mining, manufacturing or opera
 
 Use `cce-feature-platform` for customer data platform topics: Bronze -> Silver -> Gold modeling, identity resolution, feature serving and downstream campaign activation. For real-time CDC, Kafka, Redis and EKS sizing, see `cce-feature-platform/docs/REALTIME_FEATURE_PLATFORM_480K.md`. For Spark synthetic data, EMR/Delta, S3 layout and Airflow orchestration, see `cce-feature-platform/docs/BIG_DATA_EMR_DELTA_EXTENSION.md`. For the LLM/vector DB extension over existing MLOps, see `cce-feature-platform/docs/AI_VECTOR_DB_EXTENSION.md`.
 
-Use [`corporate-knowledge-base-poc`](corporate-knowledge-base-poc/README.md) when discussing enterprise knowledge-base automation. The implementation has moved to its own KB repo; this workspace keeps a pointer for the lightweight S3 + Bedrock Knowledge Bases path, medium RAG with explicit vector DB, fine-tuning and private runtime trade-offs, VPC design, and Jenkins/GitLab deployment options.
+Use [Z3934500/KB](https://github.com/Z3934500/KB) when discussing enterprise knowledge-base automation: lightweight S3 + Bedrock Knowledge Bases, medium RAG with explicit vector DB, fine-tuning and private runtime trade-offs, VPC design, and Jenkins/GitLab deployment options.
 
 ## Presenter Knowledge Cockpit
 

@@ -235,9 +235,9 @@ cce-feature-platform-secrets
 | Stream job | consumer lag, RocksDB state size, rebalance count, checkpoint/restart time |
 | Databricks | job duration, late data count, Silver DQ rejects, Gold row count |
 
-## 7. Design Notes
+## 6. Design Narrative
 
-Summary:
+Short version:
 
 > The platform separates T+1 batch features from real-time intent features. Databricks or EMR computes Bronze/Silver/Gold features and segmentation, then an EKS CronJob syncs Gold features into Redis. For low-latency updates, Debezium captures MySQL order and cart changes into MSK, and an EKS stream job updates Redis within seconds. The Feature API reads from Redis, so downstream campaign tools do not join against transactional RDS.
 
@@ -250,9 +250,9 @@ Detailed bullets:
 - CDC: MSK Connect runs Debezium for MySQL binlog capture on orders and cart tables; initial `tasks.max=1` is enough for the estimated 16.7 events/sec average and preserves simple ordering.
 - Identity: NRIC/FIN/Passport are normalized in Silver and resolved to `unified_customer_key` before both batch and real-time feature calculation.
 
-## 8. Implementation Mapping
+## 7. Implementation Mapping
 
-| Capability | Concrete implementation |
+| Resume wording | Concrete implementation to mention |
 | --- | --- |
 | Built T+1 feature platform on Databricks + Spark using Bronze -> Silver -> Gold layering | `pipeline.py` for local demo and `deploy/databricks/cce_medallion_job.py` for production Spark/Delta mapping. |
 | Designed multi-identifier resolution | Silver identity crosswalk maps NRIC/FIN/Passport to `unified_customer_key`. |
@@ -263,7 +263,7 @@ Detailed bullets:
 
 ## 9. Scope Statement
 
-This repository is intentionally a compact reference PoC. It demonstrates architecture, data contracts, deployment shape and sizing rationale. In a production implementation, the local JSON online store becomes ElastiCache Redis, the JSONL CDC sample becomes Debezium topics on MSK, and the local Python pipeline maps to Databricks Delta jobs.
+This repository is intentionally a compact interview PoC. It demonstrates architecture, data contracts, deployment shape and sizing rationale. In a production implementation, the local JSON online store becomes ElastiCache Redis, the JSONL CDC sample becomes Debezium topics on MSK, and the local Python pipeline maps to Databricks Delta jobs.
 
 ## 10. AWS Reference Links
 

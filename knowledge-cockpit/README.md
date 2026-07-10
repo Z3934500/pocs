@@ -2,6 +2,8 @@
 
 Presenter cockpit and lightweight knowledge-base app for the data-engineering PoC repository.
 
+For the standalone enterprise knowledge-base automation PoC, see [Z3934500/KB](https://github.com/Z3934500/KB).
+
 It can run in two modes:
 
 - Static mode: Story Map, terminology cards, demo script, Q&A, concept graph and presenter notes.

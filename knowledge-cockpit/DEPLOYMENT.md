@@ -216,7 +216,7 @@ Local LAN HTTP is enough for control testing. PWA install is best tested on HTTP
 
 This supports static mode only. It will not support AI KB or remote control because there is no backend.
 
-Repository: [Z3934500/pocs](https://github.com/Z3934500/pocs)
+Repository: [your-org-or-user/pocs](https://github.com/<your-org-or-user>/pocs)
 
 1. Commit the `knowledge-cockpit/` folder.
 2. In GitHub, open Settings -> Pages.
@@ -225,7 +225,7 @@ Repository: [Z3934500/pocs](https://github.com/Z3934500/pocs)
 5. Visit:
 
 ```text
-https://Z3934500.github.io/pocs/knowledge-cockpit/
+https://your-static-host.example/knowledge-cockpit/
 ```
 
 ## Private Presenter Notes
