@@ -9,6 +9,7 @@ This repository supports the delivery portfolio behind `your-own-domain.example`
 | Data | OLTP/OLAP boundaries, CDC, data contracts, medallion modeling, feature platforms and MLOps | `oms-oltp-poc`, `inventory-oms-poc`, `data-governance-poc`, `oee-data-platform`, `cce-feature-platform` |
 | Automation | Enterprise knowledge operations, GenAI/RAG, CI/CD, VPC delivery patterns and workflow automation | [`corporate-knowledge-base-poc`](corporate-knowledge-base-poc/README.md), `knowledge-cockpit` |
 | Presenter / Website | Demo control, narrative handoff and deployable public-facing explanation | `knowledge-cockpit`, `your-own-domain.example` deployment notes |
+>>>>>>> ec1c509 (Update README.md)
 
 The Data direction explains how business systems produce reliable analytical and ML-ready data. The Automation direction explains how cloud-native delivery, AI and CI/CD reduce repeated manual work and package enterprise knowledge into operated workflows.
 
