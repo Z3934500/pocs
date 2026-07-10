@@ -8,7 +8,7 @@ This repository supports the delivery portfolio behind my website. It is organiz
 | --- | --- | --- |
 | Data | OLTP/OLAP boundaries, CDC, data contracts, medallion modeling, feature platforms and MLOps | `oms-oltp-poc`, `inventory-oms-poc`, `data-governance-poc`, `oee-data-platform`, `cce-feature-platform` |
 | Automation | Enterprise knowledge operations, GenAI/RAG, CI/CD, VPC delivery patterns and workflow automation | [KB](https://github.com/Z3934500/KB), `knowledge-cockpit` |
-| Presenter / Website | Demo control, narrative handoff and deployable public-facing explanation | `knowledge-cockpit`, `your own domain` deployment notes |
+| Presenter / Website | Demo control, narrative handoff and deployable public-facing explanation | `knowledge-cockpit`, `my own domain` deployment notes |
 
 The Data direction explains how business systems produce reliable analytical and ML-ready data. The Automation direction explains how cloud-native delivery, AI and CI/CD reduce repeated manual work and package enterprise knowledge into operated workflows.
 
@@ -31,8 +31,8 @@ In simple Automation terms:
 | `data-governance-poc` | Data governance / Data SRE | Executable contracts, freshness, drift and reconciliation checks | Monitors the OMS Outbox and inventory state so downstream OLAP tables and ML features are trustworthy |
 | `oee-data-platform` | OLAP | Industrial equipment analytics, medallion data platform | Multi-site OEE ingestion, schema standardization, data quality, anomaly detection and dashboard |
 | `cce-feature-platform` | OLAP + online serving | Databricks ETL, customer features, real-time feature store | Customer Campaign Engine / CDP style platform with identity resolution, segmentation, eligibility, API consumption and [big-data EMR/Delta extension](cce-feature-platform/docs/BIG_DATA_EMR_DELTA_EXTENSION.md) |
-| [Z3934500/KB](https://github.com/Z3934500/KB) | GenAI automation | Enterprise RAG knowledge base | Standalone repo for the lightweight S3 + Bedrock path, medium vector DB path, fine-tuning/private-runtime path, VPC diagrams and Jenkins/GitLab deployment trade-offs |
-| `knowledge-cockpit` | Presenter / website | Demo control panel and AI KB shell | Installable PWA, phone remote control, presenter notes, repo Q&A and deployment path for your own domain |
+| [KB](https://github.com/Z3934500/KB) | GenAI automation | Enterprise RAG knowledge base | Standalone repo for the lightweight S3 + Bedrock path, medium vector DB path, fine-tuning/private-runtime path, VPC diagrams and Jenkins/GitLab deployment trade-offs |
+| `knowledge-cockpit` | Presenter / website | Demo control panel and AI KB shell | Installable PWA, phone remote control, presenter notes, repo Q&A and deployment path for my own domain |
 
 ### OLTP vs OLAP
 
