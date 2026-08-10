@@ -1,0 +1,26 @@
+# Example values for the prometheus-community/prometheus-adapter chart.
+# Install/configure this separately from the OMS application chart.
+#
+# The HPA template uses External metrics, so the external rule is the relevant
+# section. Keep the custom rule when another workload needs pod custom metrics.
+
+rules:
+  default: false
+  custom:
+    - seriesQuery: '{__name__=~"oms_(sqs_queue_visible_messages|seckill_stream_pending|outbox_depth|kafka_consumer_lag)"}'
+      resources:
+        overrides:
+          namespace:
+            resource: namespace
+          pod:
+            resource: pod
+      name:
+        matches: "^(.*)$"
+        as: "$1"
+      metricsQuery: 'sum(<<.Series>>{<<.LabelMatchers>>}) by (<<.GroupBy>>)'
+  external:
+    - seriesQuery: '{__name__=~"oms_(sqs_queue_visible_messages|seckill_stream_pending|outbox_depth|kafka_consumer_lag)"}'
+      name:
+        matches: "^(.*)$"
+        as: "$1"
+      metricsQuery: 'sum(<<.Series>>{<<.LabelMatchers>>})'

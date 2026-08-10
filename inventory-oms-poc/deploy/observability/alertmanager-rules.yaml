@@ -1,0 +1,160 @@
+# Prometheus AlertManager Rules — OMS Payment System
+# Apply: kubectl apply -f alertmanager-rules.yaml -n monitoring
+# Or reference from kube-prometheus-stack PrometheusRule CRD.
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: oms-payment-alerts
+  namespace: monitoring
+  labels:
+    prometheus: kube-prometheus
+    role: alert-rules
+spec:
+  groups:
+
+    # ── P1: Financial Integrity ───────────────────────────────────────────────
+    - name: oms.payment.p1
+      rules:
+        - alert: OmsCompensationFailed
+          expr: sum(increase(oms_business_operations_total{operation="payment.compensation.failed"}[5m])) > 0
+          for: 0m   # Fire immediately — no tolerance
+          labels:
+            severity: critical
+            team: payment
+            priority: P1
+          annotations:
+            summary: "COMPENSATION_FAILED orders detected"
+            description: "{{ $value }} order(s) stuck in COMPENSATION_FAILED. Saga + compensation both failed. Manual review required. Query: SELECT order_id FROM customer_order WHERE status='COMPENSATION_FAILED';"
+            runbook: "https://wiki/runbooks/oms-compensation-failed"
+
+        - alert: OmsLedgerImbalance
+          expr: oms_recon_mismatch_total{type="ledger"} > 0
+          for: 0m
+          labels:
+            severity: critical
+            team: payment
+            priority: P1
+          annotations:
+            summary: "Payment ledger DEBIT ≠ CREDIT"
+            description: "{{ $value }} transaction(s) with imbalanced ledger entries. Financial integrity breach. Run reconciliation immediately."
+            runbook: "https://wiki/runbooks/oms-ledger-imbalance"
+
+        - alert: OmsSeckillNotInitialized
+          expr: increase(oms_seckill_admission_total{outcome="not_initialized"}[2m]) > 0
+          for: 0m
+          labels:
+            severity: critical
+            team: inventory
+            priority: P1
+          annotations:
+            summary: "Seckill quota not initialized in Redis"
+            description: "Redis seckill quota missing for a SKU. Admission layer rejecting valid requests. Run: POST /api/seckill/{sku}/initialize"
+
+    # ── P2: Payment Health ────────────────────────────────────────────────────
+    - name: oms.payment.p2
+      rules:
+        - alert: OmsPaymentUnknownGrowing
+          expr: |
+            rate(oms_business_operations_total{operation="payment.capture.unknown"}[10m]) > 0.01
+          for: 5m
+          labels:
+            severity: warning
+            team: payment
+            priority: P2
+          annotations:
+            summary: "PAYMENT_UNKNOWN orders accumulating"
+            description: "Payment capture timeouts not resolving. Rate: {{ $value | humanizePercentage }}/s. Check provider latency and run status queries."
+
+        - alert: OmsPaymentCaptureFailureRateHigh
+          expr: |
+            rate(oms_business_operations_total{outcome="failure",service="payment"}[5m])
+            / rate(oms_business_operations_total{service="payment"}[5m]) > 0.05
+          for: 3m
+          labels:
+            severity: warning
+            team: payment
+            priority: P2
+          annotations:
+            summary: "Payment capture failure rate > 5%"
+            description: "Current failure rate: {{ $value | humanizePercentage }}. Check provider status and DB lock contention."
+
+    # ── P2: Event Pipeline ────────────────────────────────────────────────────
+    - name: oms.outbox.p2
+      rules:
+        - alert: OmsOutboxOldestEventStale
+          expr: oms_outbox_oldest_age_seconds > 300   # 5 minutes
+          for: 2m
+          labels:
+            severity: warning
+            team: platform
+            priority: P2
+          annotations:
+            summary: "Outbox oldest pending event > 5 min"
+            description: "Oldest un-relayed event is {{ $value }}s old (SLA: 60s). Check relay worker pod and Kafka/SQS connectivity."
+
+        - alert: OmsOutboxDepthHigh
+          expr: oms_outbox_pending_depth > 500
+          for: 5m
+          labels:
+            severity: warning
+            team: platform
+            priority: P2
+          annotations:
+            summary: "Outbox pending depth > 500"
+            description: "{{ $value }} events awaiting relay. Relay worker may be stuck or upstream broker unavailable."
+
+    # ── P2: Infrastructure ────────────────────────────────────────────────────
+    - name: oms.infra.p2
+      rules:
+        - alert: OmsRedisEvictionNonZero
+          expr: increase(redis_evicted_keys_total[5m]) > 0
+          for: 0m
+          labels:
+            severity: warning
+            team: platform
+            priority: P2
+          annotations:
+            summary: "Redis evicting keys — seckill quota data at risk"
+            description: "{{ $value }} keys evicted in last 5m. If seckill.redis.enabled=true, quota counters may be incorrect. Review maxmemory-policy."
+
+        - alert: OmsHikariConnectionPoolExhausted
+          expr: hikaricp_connections_pending > 0
+          for: 2m
+          labels:
+            severity: warning
+            team: platform
+            priority: P2
+          annotations:
+            summary: "Hikari connection pool has pending requests"
+            description: "Service {{ $labels.pool }}: {{ $value }} threads waiting for DB connection. May indicate DB overload or connection leak."
+
+        - alert: OmsInventoryStockMismatch
+          expr: oms_recon_mismatch_total{type="inventory"} > 0
+          for: 0m
+          labels:
+            severity: warning
+            team: inventory
+            priority: P2
+          annotations:
+            summary: "Inventory stock reconciliation mismatch"
+            description: "{{ $value }} SKU(s) where reserved_qty ≠ sum of RESERVED reservations. Run reconciliation job."
+
+    # ── P3: SLO Burn Rate ─────────────────────────────────────────────────────
+    - name: oms.slo.burn
+      rules:
+        - alert: OmsPaymentSLOFastBurn
+          # 5% error budget consumed in 1 hour = 14.4x burn rate
+          expr: |
+            (
+              rate(oms_business_operations_total{outcome="failure",service="payment"}[1h])
+              / rate(oms_business_operations_total{service="payment"}[1h])
+            ) > 14.4 * (1 - 0.995)
+          for: 2m
+          labels:
+            severity: warning
+            team: payment
+            priority: P3
+          annotations:
+            summary: "Payment SLO fast burn — error budget depleting"
+            description: "Burn rate {{ $value | humanizeDuration }}x. At this rate the monthly error budget will be exhausted in < 1 hour."
