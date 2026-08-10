@@ -1,0 +1,36 @@
+# Enable this overlay only after Prometheus Adapter (or another
+# custom.metrics.k8s.io provider) is installed and the queue metrics are scraped.
+# Example:
+# helm upgrade --install oms ./deploy/helm/oms-services \
+#   -f ./deploy/helm/oms-services/values-production.yaml \
+#   -f ./deploy/helm/oms-services/values-queue-scaling.yaml
+
+hpa:
+  customMetrics:
+    enabled: true
+    byService:
+      inventory-service:
+        - name: oms_sqs_queue_visible_messages
+          selector:
+            queue: inventory-reservation-command
+          targetType: AverageValue
+          targetAverageValue: "100"
+        - name: oms_outbox_depth
+          selector: {}
+          targetType: AverageValue
+          targetAverageValue: "100"
+      order-service:
+        - name: oms_sqs_queue_visible_messages
+          selector:
+            queue: inventory-reservation-result
+          targetType: AverageValue
+          targetAverageValue: "100"
+        - name: oms_outbox_depth
+          selector: {}
+          targetType: AverageValue
+          targetAverageValue: "100"
+      payment-service:
+        - name: oms_outbox_depth
+          selector: {}
+          targetType: AverageValue
+          targetAverageValue: "100"

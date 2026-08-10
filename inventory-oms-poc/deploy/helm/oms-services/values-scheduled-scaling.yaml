@@ -1,0 +1,32 @@
+# Business-hours schedule contract.
+# This file does not directly stop RDS. The infrastructure-live repository must
+# apply the same schedule to AWS Instance Scheduler and keep the RDS tag value
+# consistent with scheduledScaling.rds.schedulerTagValue.
+#
+# Example:
+# helm upgrade --install oms ./deploy/helm/oms-services \
+#   -f ./deploy/helm/oms-services/values-production.yaml \
+#   -f ./deploy/helm/oms-services/values-scheduled-scaling.yaml
+
+scheduledScaling:
+  enabled: true
+  timezone: Asia/Shanghai
+  businessDays: MON-FRI
+  startAt: "08:00"
+  stopAt: "20:30"
+  rds:
+    enabled: true
+    engine: postgresql
+    instanceIdentifier: REPLACE_WITH_RDS_INSTANCE_IDENTIFIER
+    schedulerTagKey: Schedule
+    schedulerTagValue: oms-weekday-business-hours
+    automaticBackupsRequired: true
+  drain:
+    maxOutboxDepth: 0
+    maxOldestOutboxAgeSeconds: 30
+    maxVisibleQueueDepth: 0
+    requireReadinessAfterStart: true
+  app:
+    # Application scale-in is coordinated by GitOps/operations. Keep false
+    # until a cluster-specific scheduled scaler has been reviewed.
+    enabled: false

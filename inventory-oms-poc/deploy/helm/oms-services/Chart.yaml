@@ -1,0 +1,6 @@
+apiVersion: v2
+name: oms-services
+description: Order, Inventory and Payment services for the Java OMS PoC
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

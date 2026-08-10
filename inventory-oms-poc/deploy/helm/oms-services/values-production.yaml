@@ -1,0 +1,154 @@
+global:
+  registry: ACCOUNT.dkr.ecr.ap-southeast-1.amazonaws.com
+  tag: REPLACE_WITH_IMMUTABLE_DIGEST_TAG
+  imagePullPolicy: IfNotPresent
+  serviceAccount:
+    create: true
+    # [kb-land] Source: AWS_NETWORK_AND_SECURITY_PATTERNS.md
+    # Pattern: IRSA / EKS Pod Identity — least-privilege per-service IAM Role.
+    #
+    # ⚠️  ANTI-PATTERN (current): one shared oms-runtime-role for all services.
+    #    This violates least-privilege — Inventory should not have Payment's KMS Decrypt
+    #    permission, and Order should not have direct SQS send rights for the inventory queue.
+    #
+    # ✅  CORRECT pattern: each service gets its own IAM Role with only the AWS APIs it needs:
+    #    order-service    → result-queue Receive/Delete, Secrets read
+    #    inventory-service → SQS FIFO Send/Receive/Delete, Redis/Secrets
+    #    payment-service  → payment Secrets, KMS Decrypt on payment key ONLY
+    #
+    # TODO (P1): refactor serviceaccount.yaml + deployment.yaml to create one ServiceAccount
+    #            per service (services.xxx.irsaRoleArn) so each can carry its own annotation.
+    #            For EKS Pod Identity (EKS 1.24+) the annotation is not required — use an
+    #            EKS Pod Identity Association instead.
+    #
+    # Temporary: keeping single role until Helm SA-per-service refactor is done.
+    annotations:
+      eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT:role/oms-runtime-role
+    # Per-service roles to replace the above after P1 Helm refactor:
+    # order-service:     arn:aws:iam::ACCOUNT:role/oms-order-service-role
+    # inventory-service: arn:aws:iam::ACCOUNT:role/oms-inventory-service-role
+    # payment-service:   arn:aws:iam::ACCOUNT:role/oms-payment-service-role
+
+services:
+  order-service:
+    port: 8081
+    replicas: 3
+    env:
+      INVENTORY_SERVICE_URL: http://inventory-service:8082
+      PAYMENT_SERVICE_URL: http://payment-service:8083
+    resources:
+      requests: { cpu: 500m, memory: 1Gi }
+      limits: { cpu: "2", memory: 2Gi }
+  inventory-service:
+    port: 8082
+    replicas: 3
+    env: {}
+    resources:
+      requests: { cpu: 500m, memory: 1Gi }
+      limits: { cpu: "2", memory: 2Gi }
+  payment-service:
+    port: 8083
+    replicas: 3
+    env: {}
+    resources:
+      requests: { cpu: 500m, memory: 1Gi }
+      limits: { cpu: "2", memory: 2Gi }
+
+hpa:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 20
+  targetCpuUtilization: 60
+  # [kb-land] Source: OMS_DESIGN_PATTERNS.md + ORDER_INVENTORY_FIFO_SQS.md
+  # Pattern: HPA multi-metric — CPU + external queue/outbox depth.
+  # Prerequisites before setting enabled: true:
+  #   1. KEDA ScaledObject OR Prometheus Adapter + custom-metrics APIService deployed
+  #   2. CloudWatch Adapter exposing SQS ApproximateNumberOfMessagesVisible with
+  #      label queue=<queue-name> (verify: kubectl get --raw /apis/external.metrics.k8s.io/v1beta1)
+  #   3. Outbox Prometheus gauges exposed by each service's /actuator/prometheus endpoint
+  # Schema: each entry maps to $metric.name / $metric.selector / $metric.targetAverageValue
+  #         consumed by deploy/helm/oms-services/templates/hpa.yaml
+  customMetrics:
+    enabled: false   # flip to true after metrics API is verified in staging
+    byService:
+      order-service:
+        # SQS result queue — scale when reservation result messages accumulate
+        - name: sqs_approximate_number_of_messages_visible
+          selector:
+            queue: oms-inventory-reservation-result
+          targetType: AverageValue
+          targetAverageValue: "30"
+        # Outbox relay lag — Prometheus gauge exposed by OutboxMetrics bean
+        - name: order_outbox_pending_depth
+          selector:
+            service: order-service
+          targetType: AverageValue
+          targetAverageValue: "50"
+      inventory-service:
+        # SQS FIFO command queue — scale reservation workers before CPU saturates
+        - name: sqs_approximate_number_of_messages_visible
+          selector:
+            queue: oms-inventory-reservation-command.fifo
+          targetType: AverageValue
+          targetAverageValue: "30"
+        - name: inventory_outbox_pending_depth
+          selector:
+            service: inventory-service
+          targetType: AverageValue
+          targetAverageValue: "50"
+      payment-service:
+        # Payment outbox relay lag — payment events must drain before next retry window
+        - name: payment_outbox_pending_depth
+          selector:
+            service: payment-service
+          targetType: AverageValue
+          targetAverageValue: "50"
+
+scheduledScaling:
+  enabled: false
+  timezone: Asia/Shanghai
+  businessDays: MON-FRI
+  startAt: "08:00"
+  stopAt: "20:30"
+  rds:
+    enabled: false
+    engine: postgresql
+    instanceIdentifier: ""
+    schedulerTagKey: Schedule
+    schedulerTagValue: oms-weekday-business-hours
+    automaticBackupsRequired: true
+  drain:
+    maxOutboxDepth: 0
+    maxOldestOutboxAgeSeconds: 30
+    maxVisibleQueueDepth: 0
+    requireReadinessAfterStart: true
+  app:
+    enabled: false
+
+scheduling:
+  topologySpread:
+    enabled: true
+  podAntiAffinity:
+    enabled: true
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 2
+
+observability:
+  tracing:
+    # Agent is active — Spring Actuator OTLP export is disabled in deployment.yaml
+    # to prevent double spans. This flag still needs to be false explicitly.
+    enabled: false
+    # gRPC 4317: NO /v1/traces path suffix (was /v1/traces in previous HTTP config — WRONG for gRPC)
+    # Namespace: monitoring (matches adot-collector.yaml deployment namespace)
+    otlpEndpoint: http://adot-collector.monitoring.svc.cluster.local:4317
+    # Production: 10% sampling. ADOT X-Ray centralized sampling rules override this at runtime.
+    samplingProbability: "0.1"
+  agent:
+    enabled: true
+    # ADOT Java Agent JAR — baked into base image or mounted via initContainer.
+    # To mount via initContainer, add to deployment.yaml (see adot-collector.yaml comments).
+    javaagentPath: /opt/aws-opentelemetry-agent.jar
+  serviceMonitor:
+    enabled: true

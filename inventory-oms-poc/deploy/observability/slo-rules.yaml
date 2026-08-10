@@ -1,0 +1,115 @@
+# SLO Recording Rules — OMS Payment System
+# Defines error rate, latency SLOs and error budget burn rate.
+# Compatible with OpenSLO / Prometheus Operator PrometheusRule.
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: oms-slo-rules
+  namespace: monitoring
+  labels:
+    prometheus: kube-prometheus
+    role: alert-rules
+spec:
+  groups:
+
+    # ── Recording rules: base rates (1m, 5m, 30m, 1h, 6h windows) ────────────
+    - name: oms.slo.recording
+      interval: 30s
+      rules:
+        # Payment capture success rate
+        - record: oms:payment_capture:success_rate1m
+          expr: |
+            rate(oms_business_operations_total{outcome="success",operation=~"payment.capture.*"}[1m])
+            / rate(oms_business_operations_total{operation=~"payment.capture.*"}[1m])
+
+        - record: oms:payment_capture:success_rate5m
+          expr: |
+            rate(oms_business_operations_total{outcome="success",operation=~"payment.capture.*"}[5m])
+            / rate(oms_business_operations_total{operation=~"payment.capture.*"}[5m])
+
+        - record: oms:payment_capture:success_rate1h
+          expr: |
+            rate(oms_business_operations_total{outcome="success",operation=~"payment.capture.*"}[1h])
+            / rate(oms_business_operations_total{operation=~"payment.capture.*"}[1h])
+
+        # Order API latency — http_server_requests from Spring Actuator histogram
+        - record: oms:order_api:p95_latency1m
+          expr: |
+            histogram_quantile(0.95,
+              sum(rate(http_server_requests_seconds_bucket{service="order-service",uri="/api/orders",status="200"}[1m]))
+              by (le, service)
+            )
+
+        - record: oms:order_api:p99_latency1m
+          expr: |
+            histogram_quantile(0.99,
+              sum(rate(http_server_requests_seconds_bucket{service="order-service",uri="/api/orders",status="200"}[1m]))
+              by (le, service)
+            )
+
+        # Outbox delivery latency SLO — age of oldest un-relayed event
+        - record: oms:outbox:oldest_age_seconds
+          expr: |
+            max(oms_outbox_oldest_age_seconds) by (service)
+
+        # Error budget remaining (30-day window, SLO = 99.5%)
+        # error_budget_remaining = 1 - (error_rate_30d / (1 - slo_target))
+        - record: oms:payment_capture:error_budget_remaining30d
+          expr: |
+            1 - (
+              (1 - rate(oms_business_operations_total{outcome="success",operation=~"payment.capture.*"}[30d])
+                   / rate(oms_business_operations_total{operation=~"payment.capture.*"}[30d]))
+              / (1 - 0.995)
+            )
+
+    # ── SLO Objective Definitions ─────────────────────────────────────────────
+    # These are informational metrics surfaced to the SLO dashboard.
+    - name: oms.slo.objectives
+      rules:
+        - record: oms:slo:payment_capture_success_rate_target
+          expr: "vector(0.995)"      # 99.5% captures succeed
+          labels:
+            slo: payment_capture_availability
+
+        - record: oms:slo:order_api_p95_latency_target_seconds
+          expr: "vector(2.0)"        # P95 < 2s for POST /api/orders
+          labels:
+            slo: order_api_latency
+
+        - record: oms:slo:outbox_delivery_latency_target_seconds
+          expr: "vector(60)"         # events delivered within 60s
+          labels:
+            slo: outbox_delivery
+
+    # ── Burn rate alerts (multi-window) ───────────────────────────────────────
+    - name: oms.slo.burnrate
+      rules:
+        # Fast burn: > 14.4x over 1h + > 14.4x over 5m (page)
+        - alert: OmsPaymentSLOCriticalBurn
+          expr: |
+            (
+              oms:payment_capture:success_rate5m  < (1 - 14.4 * 0.005)
+            ) and (
+              oms:payment_capture:success_rate1h  < (1 - 14.4 * 0.005)
+            )
+          for: 2m
+          labels:
+            severity: critical
+            priority: P1
+          annotations:
+            summary: "Payment SLO critical burn — page on-call"
+            description: "5m and 1h burn rates both exceed 14.4x. Monthly error budget exhausted in < 1h."
+
+        # Slow burn: > 1x over 6h (ticket)
+        - alert: OmsPaymentSLOSlowBurn
+          expr: |
+            rate(oms_business_operations_total{outcome="failure",service="payment"}[6h])
+            / rate(oms_business_operations_total{service="payment"}[6h]) > 0.005
+          for: 15m
+          labels:
+            severity: warning
+            priority: P3
+          annotations:
+            summary: "Payment SLO slow burn — error budget consuming"
+            description: "6h error rate exceeds SLO target. Error budget: {{ $value | humanizePercentage }} remaining."

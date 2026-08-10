@@ -1,0 +1,60 @@
+services:
+  order-service:
+    build:
+      context: .
+      dockerfile: order-service/Dockerfile
+    ports:
+      - "8081:8081"
+    environment:
+      INVENTORY_SERVICE_URL: http://inventory-service:8082
+      PAYMENT_SERVICE_URL: http://payment-service:8083
+    depends_on:
+      - inventory-service
+      - payment-service
+    read_only: true
+    tmpfs:
+      - /tmp
+    volumes:
+      - order-data:/app/data
+
+  inventory-service:
+    build:
+      context: .
+      dockerfile: inventory-service/Dockerfile
+    ports:
+      - "8082:8082"
+    environment:
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: 6379
+      SECKILL_REDIS_ENABLED: "false"
+    depends_on:
+      - redis
+    read_only: true
+    tmpfs:
+      - /tmp
+    volumes:
+      - inventory-data:/app/data
+
+  payment-service:
+    build:
+      context: .
+      dockerfile: payment-service/Dockerfile
+    ports:
+      - "8083:8083"
+    read_only: true
+    tmpfs:
+      - /tmp
+    volumes:
+      - payment-data:/app/data
+
+  redis:
+    image: redis:7.2-alpine
+    command: ["redis-server", "--appendonly", "no"]
+    read_only: true
+    tmpfs:
+      - /data
+
+volumes:
+  order-data:
+  inventory-data:
+  payment-data:

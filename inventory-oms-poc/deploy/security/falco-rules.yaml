@@ -1,0 +1,128 @@
+# Falco Runtime Security Rules — OMS Payment Services
+# Detects anomalous behavior in payment, order, and inventory pods at runtime.
+# Apply: helm upgrade falco falcosecurity/falco --set-file falco.rulesFiles[0]=falco-rules.yaml
+# Or add to falco ConfigMap: /etc/falco/rules.d/oms-payment-rules.yaml
+#
+# Severity levels: EMERGENCY > ALERT > CRITICAL > ERROR > WARNING > NOTICE > INFO > DEBUG
+
+- list: oms_services
+  items: [order-service, inventory-service, payment-service]
+
+- list: allowed_payment_destinations
+  items:
+    # PSP / payment provider endpoints (add real IPs in production)
+    - 10.0.0.0/8       # VPC internal
+    - 172.16.0.0/12    # RFC1918
+    - 192.168.0.0/16   # RFC1918
+    # External: add approved PSP CIDR ranges here
+
+- list: sensitive_payment_files
+  items:
+    - /etc/ssl/private
+    - /var/run/secrets/kubernetes.io/serviceaccount/token
+    - /app/config/payment-secrets
+
+- macro: oms_payment_container
+  condition: container.name = "payment-service"
+
+- macro: oms_any_service_container
+  condition: container.label[app.kubernetes.io/part-of] = "oms"
+
+# ── Rule 1: Unexpected outbound network from payment service ─────────────────
+# Payment service should only talk to: DB, inventory-service, order-service, PSP
+- rule: OMS Payment Unexpected Outbound Connection
+  desc: Payment service established connection to an unexpected destination
+  condition: >
+    evt.type in (connect, sendto) and
+    oms_payment_container and
+    not fd.sip.net in (allowed_payment_destinations) and
+    fd.typechar = 4 and
+    evt.dir = <
+  output: >
+    Payment service unexpected outbound (container=%container.name
+    image=%container.image.repository pod=%k8s.pod.name
+    dest_ip=%fd.rip dest_port=%fd.rport
+    command=%proc.cmdline)
+  priority: CRITICAL
+  tags: [network, payment, pci-dss]
+
+# ── Rule 2: Shell or exec in payment container ───────────────────────────────
+# No interactive shell should ever run in a payment pod
+- rule: OMS Shell Spawned in Payment Container
+  desc: A shell was spawned inside a payment service container
+  condition: >
+    evt.type = execve and
+    oms_payment_container and
+    proc.name in (bash, sh, zsh, dash, fish, ksh)
+  output: >
+    Shell spawned in payment container (container=%container.name
+    pod=%k8s.pod.name user=%user.name shell=%proc.name parent=%proc.pname
+    cmdline=%proc.cmdline image=%container.image.repository)
+  priority: ALERT
+  tags: [shell, payment, runtime-security]
+
+# ── Rule 3: Sensitive file read in OMS containers ────────────────────────────
+- rule: OMS Sensitive File Read
+  desc: A process in an OMS container read a sensitive file
+  condition: >
+    evt.type in (open, openat) and
+    oms_any_service_container and
+    fd.name pmatch (sensitive_payment_files) and
+    proc.name != java and
+    not proc.name startswith "java"
+  output: >
+    Sensitive file read by non-JVM process (container=%container.name
+    pod=%k8s.pod.name file=%fd.name proc=%proc.name user=%user.name)
+  priority: ERROR
+  tags: [file, payment, credentials]
+
+# ── Rule 4: Unexpected binary execution in OMS containers ───────────────────
+# Only java and the entrypoint script should run
+- rule: OMS Unexpected Process in Service Container
+  desc: An unexpected process started in an OMS service container
+  condition: >
+    evt.type = execve and
+    oms_any_service_container and
+    not proc.name in (java, sh, tini, entrypoint.sh, mvn) and
+    not proc.pname in (java, tini, entrypoint.sh) and
+    proc.is_container_healthcheck = false
+  output: >
+    Unexpected process in OMS container (container=%container.name
+    pod=%k8s.pod.name proc=%proc.name parent=%proc.pname
+    cmdline=%proc.cmdline user=%user.name)
+  priority: WARNING
+  tags: [process, runtime-security]
+
+# ── Rule 5: Writing outside /tmp or /app/data ────────────────────────────────
+- rule: OMS Write to Unexpected Directory
+  desc: OMS service writing to a directory not in the allowed list
+  condition: >
+    evt.type in (open, openat, creat) and
+    evt.is_open_write = true and
+    oms_any_service_container and
+    not fd.name startswith /tmp and
+    not fd.name startswith /app/data and
+    not fd.name startswith /proc and
+    not fd.name = /dev/null
+  output: >
+    Unexpected write in OMS container (container=%container.name
+    pod=%k8s.pod.name file=%fd.name proc=%proc.name)
+  priority: NOTICE
+  tags: [filesystem, runtime-security]
+
+# ── Rule 6: DB credentials accessed outside Java process ────────────────────
+- rule: OMS DB Secret Accessed by Non-JVM Process
+  desc: DB credentials read by a process other than the JVM
+  condition: >
+    evt.type in (open, openat) and
+    oms_any_service_container and
+    (fd.name contains "DB_PASSWORD" or
+     fd.name contains "datasource.password" or
+     fd.name endswith ".p12" or
+     fd.name endswith ".jks") and
+    not proc.name startswith "java"
+  output: >
+    DB credential file accessed by non-JVM process (container=%container.name
+    pod=%k8s.pod.name file=%fd.name proc=%proc.name user=%user.name)
+  priority: CRITICAL
+  tags: [credentials, database, pci-dss]

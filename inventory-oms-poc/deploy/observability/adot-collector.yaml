@@ -1,0 +1,103 @@
+# ADOT (AWS Distro for OpenTelemetry) Collector
+# Receives OTel traces/metrics from Java services → X-Ray + AMP + CloudWatch Logs
+# Deploy: kubectl apply -f adot-collector.yaml -n monitoring
+#
+# Java services activate via ADOT Java Agent (in-process, NOT Sidecar):
+#   JAVA_TOOL_OPTIONS=-javaagent:/opt/aws-opentelemetry-agent.jar -XX:MaxRAMPercentage=75
+#   OTEL_EXPORTER_OTLP_ENDPOINT=http://adot-collector.monitoring.svc.cluster.local:4317
+#   OTEL_TRACES_SAMPLER=xray
+#   OTEL_PROPAGATORS=xray,tracecontext,baggage
+#   OTEL_TRACING_ENABLED=false  ← MUST disable Spring Actuator export to prevent double spans
+#
+# Protocol note:
+#   gRPC 4317: endpoint ONLY — NO /v1/traces path (gRPC Exporter handles routing internally)
+#   HTTP 4318: endpoint MUST include /v1/traces path suffix
+#
+# Helm values override (values-production.yaml):
+#   observability.agent.enabled: true
+#   observability.tracing.otlpEndpoint: http://adot-collector.monitoring.svc.cluster.local:4317
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: adot-collector-config
+  namespace: monitoring
+data:
+  config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317   # gRPC (Java default)
+          http:
+            endpoint: 0.0.0.0:4318   # HTTP (application.properties default)
+
+    processors:
+      batch:
+        timeout: 1s
+        send_batch_size: 50
+
+      # Drop PII fields before export — never ship raw customer identifiers
+      attributes:
+        actions:
+          - key: customer.name
+            action: delete
+          - key: customer.phone
+            action: delete
+          - key: payment.pan
+            action: delete
+          - key: payment.cvv
+            action: delete
+          - key: http.request.body
+            action: delete
+
+      resource:
+        attributes:
+          - key: deployment.environment
+            value: "${ENVIRONMENT}"
+            action: upsert
+
+    exporters:
+      # Traces → AWS X-Ray
+      awsxray:
+        region: "${AWS_REGION}"
+        index_all_attributes: true
+
+      # Metrics → Amazon Managed Prometheus (AMP)
+      prometheusremotewrite:
+        endpoint: "${AMP_REMOTE_WRITE_ENDPOINT}"
+        auth:
+          authenticator: sigv4auth
+
+      # Logs → CloudWatch Logs (structured JSON only)
+      awscloudwatchlogs:
+        region: "${AWS_REGION}"
+        log_group_name: "/oms/${ENVIRONMENT}/services"
+        log_stream_name: "${HOSTNAME}"
+
+    extensions:
+      health_check: {}
+      sigv4auth:
+        region: "${AWS_REGION}"
+        service: aps
+      # REQUIRED when Java Agent uses OTEL_TRACES_SAMPLER=xray.
+      # Without this extension the Collector cannot resolve X-Ray centralized sampling rules;
+      # the Agent falls back to 100% sampling — costs blow up on high-traffic payment services.
+      xray:
+        region: "${AWS_REGION}"
+
+    service:
+      extensions: [health_check, sigv4auth, xray]
+      pipelines:
+        traces:
+          receivers:  [otlp]
+          processors: [attributes, resource, batch]
+          exporters:  [awsxray]
+        metrics:
+          receivers:  [otlp]
+          processors: [resource, batch]
+          exporters:  [prometheusremotewrite]
+        logs:
+          receivers:  [otlp]
+          processors: [attributes, resource, batch]
+          exporters:  [awscloudwatchlogs]
