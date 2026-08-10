@@ -94,13 +94,15 @@ docker compose -f docker-compose.microservices.yml up --build
 
 Detailed code boundaries are documented in [`docs/PRODUCTION_DEPLOYMENT_DEVSECOPS.md`](docs/PRODUCTION_DEPLOYMENT_DEVSECOPS.md), including AWS component selection, EKS/Helm deployment, monitoring, security and CI/CD.
 
-Interview-ready talking points: [docs/INTERVIEW_DEVSECOPS.md](docs/INTERVIEW_DEVSECOPS.md).
+Deployment and operations notes: [docs/PRODUCTION_DEPLOYMENT_DEVSECOPS.md](docs/PRODUCTION_DEPLOYMENT_DEVSECOPS.md).
 
 The consolidated architecture, business flows, lock granularity, DevOps/SRE packaging, monitoring, multi-AZ deployment and troubleshooting runbook are in [docs/ARCHITECTURE_AND_DEVOPS.md](docs/ARCHITECTURE_AND_DEVOPS.md).
 
-AWS 闁轰胶澧楀畵浣规償閹炬墎鍋撴笟鈧悵顕€宕ｉ婊勬殢闁靛棔娴囬浼村礃濞嗗繐鐎荤紒鍌涚湽閳ь兛璁U 闁告帒妫楃亸顖炴⒓閻斿嘲鐏欏☉?RDS/Aurora 闂侇偄顦悗鐑藉箑閼姐倗娉㈤悷?[docs/AWS_DATABASE_AND_HA_LESSONS.md](docs/AWS_DATABASE_AND_HA_LESSONS.md)闁靛棗鍊介鎼佸礆閹烘梻绱氶柡鈧崣銉х憿 RDS Instance Scheduler 閺夆晜鍔橀、鎴﹀箥鐎ｎ亜鏂€閻?[docs/SCHEDULED_SCALING_AND_RDS.md](docs/SCHEDULED_SCALING_AND_RDS.md)闁?## Distributed Transaction Implementation
+AWS networking, database high availability and scheduled scaling guidance is documented in [docs/AWS_DATABASE_AND_HA_LESSONS.md](docs/AWS_DATABASE_AND_HA_LESSONS.md) and [docs/SCHEDULED_SCALING_AND_RDS.md](docs/SCHEDULED_SCALING_AND_RDS.md).
 
-This Java PoC implements the distributed-transaction notes from `闂佸憡甯掑Λ妤冪博瀹勯偊鍤曢煫鍥ф捣閻ㄦ垿鏌?docx` as a runnable Spring Boot flow. It deliberately uses **local database transactions + Saga compensation + Transactional Outbox**. It does not claim to implement cross-service 2PC; 2PC/TCC are interview alternatives with different availability and operational trade-offs.
+## Distributed Transaction Implementation
+
+This Java PoC implements the distributed-transaction notes from the referenced design document as a runnable Spring Boot flow. It deliberately uses **local database transactions + Saga compensation + Transactional Outbox**. It does not claim to implement cross-service 2PC; 2PC/TCC are alternative coordination patterns with different availability and operational trade-offs.
 
 ### Payment and inventory flow
 
@@ -127,7 +129,7 @@ ReservationTimeoutScheduler -> expireReservations()
   scans RESERVED records and releases stock through the same compensation path.
 ```
 
-### Code map to the interview concepts
+### Code map to the core design concepts
 
 | Concept | Current Java implementation |
 |---|---|
@@ -141,7 +143,7 @@ ReservationTimeoutScheduler -> expireReservations()
 | Reconciliation | `reconciliation-job` compares stock totals and ledger debit/credit totals |
 | Optimistic concurrency | JPA `@Version` on stock, reservation and payment transaction |
 
-The code is intentionally explicit for an interview: database locking protects the critical inventory row; idempotency protects client and gateway retries; Saga compensation handles payment failure and timeout; Outbox/Inbox handles the gap between a committed database transaction and message delivery.
+The code is intentionally explicit for clarity: database locking protects the critical inventory row; idempotency protects client and gateway retries; Saga compensation handles payment failure and timeout; Outbox/Inbox handles the gap between a committed database transaction and message delivery.
 
 ### Run and inspect the flow
 
@@ -163,9 +165,10 @@ curl "http://localhost:8080/reservation/ledger?orderId=ORDER-100"
 
 The local publisher endpoint is a test seam, not a production guarantee: a real deployment needs Kafka/MSK, an Outbox relay with retry/backoff, DLQ, metrics and tracing. Redis/Lua can be added as the high-QPS front-door reservation accelerator, but the relational database remains the source of truth and reconciliation remains mandatory.
 
-### Clear interview answer
+### Implementation rationale
 
-> 闂佺偨鍎茬粣濯渞 the payment path I use a local transaction for each service闂佺偨鍎查悰?own state, then Saga for the cross-service workflow. I lock the inventory row with `SELECT FOR UPDATE`, use an idempotency key for checkout and payment callbacks, and enforce uniqueness in the database. A successful payment commits reserved stock and writes balanced ledger entries; a failed payment or timeout releases the reservation through a compensating action. The Outbox is committed with the business state, and the Inbox makes Kafka redelivery safe. I would not describe this as 2PC: production would use Kafka/MSK plus an Outbox relay, DLQ, observability and reconciliation.闂?
+> In the payment path, I use a local transaction for each service's own state, then Saga for the cross-service workflow. I lock the inventory row with `SELECT FOR UPDATE`, use an idempotency key for checkout and payment callbacks, and enforce uniqueness in the database. A successful payment commits reserved stock and writes balanced ledger entries; a failed payment or timeout releases the reservation through a compensating action. The Outbox is committed with the business state, and the Inbox makes Kafka redelivery safe. I would not describe this as 2PC: production would use Kafka/MSK plus an Outbox relay, DLQ, observability and reconciliation.
+
 ### PoC boundary and production hardening
 
 - The current `PaymentRequest` is a gateway stub. The reservation snapshot already rejects amount/currency mismatches; a production gateway adapter must additionally verify signed callbacks and provider reference uniqueness before capture.
