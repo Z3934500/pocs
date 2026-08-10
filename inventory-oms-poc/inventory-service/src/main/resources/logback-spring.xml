@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Logback JSON Structured Logging — OMS Services
+  Copy to: order-service, inventory-service, payment-service src/main/resources/
+  Produces CloudWatch/ELK/Loki compatible JSON. No PII in any appender.
+
+  Log fields emitted per line:
+    timestamp, level, service, traceId, spanId, thread, logger, message
+    + MDC fields: traceId, spanId (set by OTel / RequestTraceLoggingFilter)
+
+  PII safety rules (enforced by field list — not by filter):
+    - Never log: customer.name, pan, cvv, phone, id_number, payment_token
+    - Always log: trace_id, order_id, payment_id, service, result
+    - Mask rule: any field matching /[0-9]{13,19}/ is a potential PAN — use %replace
+-->
+<configuration scan="false">
+
+  <!-- ── Console appender (dev / local) ──────────────────────────────────── -->
+  <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+    <encoder class="ch.qos.logback.classic.encoder.PatternLayoutEncoder">
+      <pattern>%d{HH:mm:ss.SSS} %5p [%X{traceId:-},%X{spanId:-}] %-40.40logger{39} : %m%n</pattern>
+    </encoder>
+  </appender>
+
+  <!-- ── JSON appender (staging / prod → CloudWatch / ELK) ─────────────── -->
+  <appender name="JSON" class="ch.qos.logback.core.ConsoleAppender">
+    <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+      <!-- Core fields -->
+      <fieldNames>
+        <timestamp>@timestamp</timestamp>
+        <message>message</message>
+        <logger>logger</logger>
+        <thread>thread</thread>
+        <levelValue>[ignore]</levelValue>
+      </fieldNames>
+
+      <!-- Service identity from Spring env -->
+      <customFields>
+        {"service": "${spring.application.name:-unknown}",
+         "environment": "${ENVIRONMENT:-local}"}
+      </customFields>
+
+      <!-- OTel MDC → standard fields -->
+      <includeMdcKeyName>traceId</includeMdcKeyName>
+      <includeMdcKeyName>spanId</includeMdcKeyName>
+
+      <!-- PII guard: mask any 13–19 digit sequence (potential PAN) -->
+      <jsonGeneratorDecorator class="net.logstash.logback.mask.MaskingJsonGeneratorDecorator">
+        <valueMasker class="net.logstash.logback.mask.RegexValueMasker">
+          <!-- Pattern covers most card numbers; not a substitute for code-level PII control -->
+          <regex>\b[0-9]{13,19}\b</regex>
+          <mask>[MASKED-PAN]</mask>
+        </valueMasker>
+      </jsonGeneratorDecorator>
+
+      <!-- Never include stack trace in message field (use stackTrace field) -->
+      <throwableConverter class="net.logstash.logback.stacktrace.ShortenedThrowableConverter">
+        <maxDepthPerThrowable>20</maxDepthPerThrowable>
+        <maxLength>2048</maxLength>
+        <rootCauseFirst>true</rootCauseFirst>
+      </throwableConverter>
+    </encoder>
+  </appender>
+
+  <!-- ── Async wrapper (non-blocking in production) ─────────────────────── -->
+  <appender name="ASYNC_JSON" class="ch.qos.logback.classic.AsyncAppender">
+    <queueSize>512</queueSize>
+    <discardingThreshold>0</discardingThreshold>  <!-- Never discard — audit trail -->
+    <includeCallerData>false</includeCallerData>
+    <appender-ref ref="JSON"/>
+  </appender>
+
+  <!-- ── Noise reduction: 3rd-party frameworks ──────────────────────────── -->
+  <logger name="org.hibernate.SQL"                        level="WARN"/>
+  <logger name="org.hibernate.type.descriptor.sql"        level="WARN"/>
+  <logger name="com.zaxxer.hikari"                        level="INFO"/>
+  <logger name="org.springframework.web"                  level="INFO"/>
+  <logger name="org.springframework.kafka"                level="INFO"/>
+  <logger name="org.apache.kafka"                         level="WARN"/>
+  <logger name="io.lettuce"                               level="WARN"/>
+  <logger name="software.amazon.awssdk"                   level="WARN"/>
+
+  <!-- ── OMS application: always DEBUG in local, INFO+ elsewhere ────────── -->
+  <logger name="com.poc" level="DEBUG" additivity="false">
+    <appender-ref ref="CONSOLE"/>
+  </logger>
+
+  <!-- ── Root logger ────────────────────────────────────────────────────── -->
+  <springProfile name="!local">
+    <root level="INFO">
+      <appender-ref ref="ASYNC_JSON"/>
+    </root>
+    <!-- Override OMS logger for non-local (use JSON) -->
+    <logger name="com.poc" level="INFO" additivity="false">
+      <appender-ref ref="ASYNC_JSON"/>
+    </logger>
+  </springProfile>
+
+  <springProfile name="local">
+    <root level="INFO">
+      <appender-ref ref="CONSOLE"/>
+    </root>
+  </springProfile>
+
+</configuration>

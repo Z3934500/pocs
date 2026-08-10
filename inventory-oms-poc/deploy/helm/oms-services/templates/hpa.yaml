@@ -1,0 +1,44 @@
+{{- /* [kb-land] Source: OMS_DESIGN_PATTERNS.md — HPA multi-metric per service.
+     CPU is always active. External metrics activate when hpa.customMetrics.enabled=true.
+     Schema for byService entries: name / selector (map) / targetType / targetAverageValue */ -}}
+{{- if .Values.hpa.enabled }}
+{{- range $name, $svc := .Values.services }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "oms-services.fullname" $ }}-{{ $name }}
+  labels:
+    app: {{ $name }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "oms-services.fullname" $ }}-{{ $name }}
+  minReplicas: {{ $.Values.hpa.minReplicas }}
+  maxReplicas: {{ $.Values.hpa.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ $.Values.hpa.targetCpuUtilization }}
+    {{- if $.Values.hpa.customMetrics.enabled }}
+    {{- range $metric := (index $.Values.hpa.customMetrics.byService $name | default (list)) }}
+    - type: External
+      external:
+        metric:
+          name: {{ $metric.name | quote }}
+          selector:
+            matchLabels:
+              {{- range $label, $value := $metric.selector }}
+              {{ $label }}: {{ $value | quote }}
+              {{- end }}
+        target:
+          type: {{ $metric.targetType | default "AverageValue" }}
+          averageValue: {{ $metric.targetAverageValue | quote }}
+    {{- end }}
+    {{- end }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,94 @@
+global:
+  registry: 123456789012.dkr.ecr.ap-southeast-1.amazonaws.com/oms
+  tag: latest
+  imagePullPolicy: IfNotPresent
+  imagePullSecrets: []
+  serviceAccount:
+    create: true
+    annotations: {}
+
+services:
+  order-service:
+    port: 8081
+    replicas: 2
+    env:
+      INVENTORY_SERVICE_URL: http://inventory-service:8082
+      PAYMENT_SERVICE_URL: http://payment-service:8083
+    resources:
+      requests: { cpu: 250m, memory: 512Mi }
+      limits: { cpu: "1", memory: 1Gi }
+  inventory-service:
+    port: 8082
+    replicas: 2
+    env: {}
+    resources:
+      requests: { cpu: 250m, memory: 512Mi }
+      limits: { cpu: "1", memory: 1Gi }
+  payment-service:
+    port: 8083
+    replicas: 2
+    env: {}
+    resources:
+      requests: { cpu: 250m, memory: 512Mi }
+      limits: { cpu: "1", memory: 1Gi }
+
+hpa:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCpuUtilization: 65
+  # Requires a Prometheus Adapter or another custom.metrics.k8s.io provider.
+  # CPU remains enabled as the default fallback.
+  customMetrics:
+    enabled: false
+    byService: {}
+
+scheduledScaling:
+  enabled: false
+  timezone: Asia/Shanghai
+  businessDays: MON-FRI
+  startAt: "08:00"
+  stopAt: "20:30"
+  rds:
+    enabled: false
+    engine: postgresql
+    instanceIdentifier: ""
+    schedulerTagKey: Schedule
+    schedulerTagValue: oms-weekday-business-hours
+    automaticBackupsRequired: true
+  drain:
+    maxOutboxDepth: 0
+    maxOldestOutboxAgeSeconds: 30
+    maxVisibleQueueDepth: 0
+    requireReadinessAfterStart: true
+  app:
+    enabled: false
+
+scheduling:
+  topologySpread:
+    enabled: true
+  podAntiAffinity:
+    enabled: true
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+observability:
+  tracing:
+    enabled: false
+    # HTTP 4318 default for local/dev (Spring Actuator native).
+    # Production with ADOT Agent: change to gRPC 4317, NO /v1/traces path.
+    otlpEndpoint: http://localhost:4318/v1/traces
+    samplingProbability: "1.0"
+  # ADOT Java Agent — in-process instrumentation (NOT a Sidecar container).
+  # Provides automatic spans for JDBC/Hikari, Kafka, Redis, HTTP clients.
+  # Enable in staging/prod; keep false for local dev (no Collector running).
+  agent:
+    enabled: false
+    # Path to javaagent JAR. Two options:
+    #   1. Bake into base image: ADD aws-opentelemetry-agent.jar /opt/
+    #   2. initContainer mount (see values-production.yaml for example)
+    javaagentPath: /opt/aws-opentelemetry-agent.jar
+  serviceMonitor:
+    enabled: false
