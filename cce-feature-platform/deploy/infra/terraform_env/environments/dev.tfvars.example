@@ -1,0 +1,18 @@
+environment = "dev"
+aws_region  = "ap-southeast-1"
+
+private_subnet_ids      = ["subnet-dev-a", "subnet-dev-b"]
+msk_security_group_id   = "sg-dev-msk"
+redis_security_group_id = "sg-dev-redis"
+
+msk_broker_count    = 1
+msk_instance_type   = "kafka.t3.small"
+msk_ebs_volume_gb   = 100
+redis_node_type     = "cache.t4g.micro"
+redis_replica_count = 0
+apply_immediately   = true
+
+tags = {
+  CostCenter = "cce-dev"
+  Owner      = "data-platform"
+}

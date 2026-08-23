@@ -1,0 +1,80 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: cce-feature-platform
+  namespace: argocd
+  # Supersedes the three hand-written Application files:
+  #   cce-dev-application.yaml / cce-staging-application.yaml / cce-production-application.yaml
+  # Single source of truth: add a new env by appending one list entry.
+spec:
+  # goTemplate enables full Go template syntax (if/else, range) inside the
+  # template block, so we can conditionally emit per-env annotations and the
+  # production manual-gate sync policy without duplicating the whole spec.
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+
+  generators:
+    - list:
+        elements:
+          # ── dev ──────────────────────────────────────────────────────────
+          - env:            dev
+            namespace:      cce-dev
+            branch:         main
+            # newest-build: always track the latest image pushed to ghcr
+            imageStrategy:  newest-build
+            imageAllowTags: ""          # no tag filter — any build accepted
+            autoSync:       "true"
+
+          # ── staging ──────────────────────────────────────────────────────
+          - env:            staging
+            namespace:      cce-staging
+            branch:         release/staging
+            imageStrategy:  semver
+            # Only accept tags like staging-1.2.3
+            imageAllowTags: 'regexp:^staging-[0-9]+\.[0-9]+\.[0-9]+$'
+            autoSync:       "true"
+
+          # ── production ───────────────────────────────────────────────────
+          - env:            production
+            namespace:      cce-production
+            branch:         main
+            imageStrategy:  semver
+            # Only accept SemVer release tags like v1.2.3
+            imageAllowTags: 'regexp:^v[0-9]+\.[0-9]+\.[0-9]+$'
+            # Manual gate: a human must click "Sync" in ArgoCD UI or run
+            # `argocd app sync cce-feature-platform-production` in the pipeline.
+            # This prevents an accidental commit from auto-deploying to prod.
+            autoSync:       "false"
+
+  template:
+    metadata:
+      name: "cce-feature-platform-{{ .env }}"
+      namespace: argocd
+      annotations:
+        argocd-image-updater.argoproj.io/image-list: cce=ghcr.io/OWNER/cce-feature-platform
+        argocd-image-updater.argoproj.io/cce.update-strategy: "{{ .imageStrategy }}"
+        argocd-image-updater.argoproj.io/write-back-method: git
+        # Conditionally emit the allow-tags annotation — dev has no filter,
+        # staging and production both have explicit regexp constraints.
+        {{- if .imageAllowTags }}
+        argocd-image-updater.argoproj.io/cce.allow-tags: "{{ .imageAllowTags }}"
+        {{- end }}
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/OWNER/REPO.git
+        targetRevision: "{{ .branch }}"
+        path: "cce-feature-platform/01_foundation/02_mvp1_20k/dev_stage_prod/deploy/k8s/overlays/{{ .env }}"
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: "{{ .namespace }}"
+      syncPolicy:
+        # Production uses a manual gate — omit `automated` entirely so ArgoCD
+        # never self-heals or prunes without an explicit human (or CI) trigger.
+        {{- if eq .autoSync "true" }}
+        automated:
+          prune: true       # remove resources deleted from Git
+          selfHeal: true    # revert any out-of-band kubectl edits
+        {{- end }}
+        syncOptions:
+          - CreateNamespace=true

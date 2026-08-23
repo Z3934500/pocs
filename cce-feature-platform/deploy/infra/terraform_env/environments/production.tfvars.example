@@ -1,0 +1,19 @@
+environment = "production"
+aws_region  = "ap-southeast-1"
+
+private_subnet_ids      = ["subnet-prod-a", "subnet-prod-b", "subnet-prod-c"]
+msk_security_group_id   = "sg-prod-msk"
+redis_security_group_id = "sg-prod-redis"
+
+msk_broker_count    = 3
+msk_instance_type   = "kafka.m5.large"
+msk_ebs_volume_gb   = 500
+redis_node_type     = "cache.m6g.large"
+redis_replica_count = 1
+apply_immediately   = false
+
+tags = {
+  CostCenter  = "cce-production"
+  Owner       = "data-platform"
+  Criticality = "production"
+}

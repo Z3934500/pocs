@@ -1,0 +1,25 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: cce-feature-platform-staging
+  namespace: argocd
+  annotations:
+    argocd-image-updater.argoproj.io/image-list: cce=ghcr.io/OWNER/cce-feature-platform
+    argocd-image-updater.argoproj.io/cce.update-strategy: latest
+    argocd-image-updater.argoproj.io/cce.allow-tags: regexp:^staging-[0-9]+\.[0-9]+\.[0-9]+$
+    argocd-image-updater.argoproj.io/write-back-method: git
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/OWNER/REPO.git
+    targetRevision: release/staging
+    path: cce-feature-platform/01_foundation/02_mvp1_20k/dev_stage_prod/deploy/k8s/environments/staging
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: cce-staging
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

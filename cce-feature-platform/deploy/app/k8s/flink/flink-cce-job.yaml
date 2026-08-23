@@ -1,0 +1,51 @@
+# Flink CCE Feature Job — Kubernetes Job manifest
+# Submits cce_platform.flink_cdc_pipeline in submit mode against a running Flink cluster.
+# Local simulation (no cluster): python -m cce_platform.flink_cdc_pipeline run
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cce-flink-cdc-job
+  namespace: data-platform-pocs
+  labels:
+    app: cce-feature-platform
+    component: flink-job
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: cce-feature-platform
+        component: flink-job
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: flink-job-submitter
+          image: ghcr.io/<owner>/cce-feature-platform:latest
+          command:
+            - python
+            - -m
+            - cce_platform.flink_cdc_pipeline
+            - submit
+          args:
+            - --kafka-brokers
+            - "$(KAFKA_BROKERS)"
+          env:
+            - name: KAFKA_BROKERS
+              valueFrom:
+                secretKeyRef:
+                  name: cce-kafka-secret
+                  key: brokers
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: cce-redis-secret
+                  key: url
+            - name: CCE_RUNTIME_ENV
+              value: production
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "512Mi"
+            limits:
+              cpu: "2"
+              memory: "2Gi"

@@ -146,6 +146,136 @@ python -m cce_platform.realtime run
 
 The local online store is a JSON-backed stand-in for Redis. The production discussion maps it to Debezium + MSK + EKS stream job + ElastiCache.
 
+### Flink CDC Pipeline (Extension)
+
+The `realtime.py` module is a batch simulation. For production workloads the `flink_cdc_pipeline` module provides a true streaming path:
+
+```powershell
+# Local simulation — no Flink cluster required, reuses same dedup + intent-score logic
+python -m cce_platform.flink_cdc_pipeline run
+
+# Submit to a running Flink cluster (requires PyFlink + Kafka)
+python -m cce_platform.flink_cdc_pipeline submit --kafka-brokers localhost:9092
+```
+
+**When Flink is required instead of the batch simulation:**
+
+| Scenario | Why Flink, not batch |
+|----------|---------------------|
+| CDC events arrive out of order across Kafka partitions | Flink Event Time + Watermark correctly assigns events to windows; batch re-scan cannot |
+| Exactly-once dedup across restarts | Flink Checkpoint + RocksDB keyed state + `stable_event_id`; batch re-run may double-count |
+| `rt_order_count_1d` must use a true sliding window | Flink `SlidingEventTimeWindows(1d, 1min slide)` increments in place; batch scans full history every run |
+| Fraud velocity check (5 transactions in 5 minutes) | Flink CEP `Pattern.begin().times(5).within(5 min)`; impossible in a periodic batch job |
+| `PREMIUM_FINANCING` / `INVESTMENT` amounts must not be double-billed | Flink exactly-once sink with Redis `MULTI/EXEC` per checkpoint boundary |
+
+The module degrades gracefully: if `REDIS_URL` is not set the sink writes to `LocalOnlineStore`; if PyFlink is not installed the `submit` command raises a clear error while `run` still works.
+
+### Financial Transaction State Machine
+
+The `redis_state_machine` module implements a ZSET-backed state machine for financial order lifecycle management:
+
+```python
+from cce_platform.redis_state_machine import TransactionStateMachine, TxnState
+
+sm = TransactionStateMachine()   # Redis if REDIS_URL set, else local JSON
+sm.init_transaction("TXN-001", amount=1700.0, product="PREMIUM_FINANCING", customer_key="U0005")
+sm.run_auto_advance("TXN-001")   # PENDING → RISK_CHECK → COMPLIANCE_HOLD → APPROVED
+sm.advance("TXN-001", TxnState.PENDING_SETTLE, actor="scheduler")
+# ... T+2 settlement date arrives ...
+sm.advance("TXN-001", TxnState.SETTLEMENT_IN_PROGRESS, actor="settlement_trigger")
+sm.advance("TXN-001", TxnState.SETTLED, actor="settlement_worker")
+```
+
+State flow:
+
+```
+PENDING → RISK_CHECK → COMPLIANCE_HOLD ┐
+                     ↘ APPROVED ────────┤→ PENDING_SETTLE → SETTLEMENT_IN_PROGRESS → SETTLED
+                       REJECTED (terminal)                ↓
+                                COMPENSATING → COMPENSATED
+```
+
+**Why ZSET instead of a status column:**
+
+- `ZRANGEBYSCORE` gives the full audit trail in O(log n) — required for financial regulatory review.
+- Score = Unix timestamp microseconds: natural ordering without a separate `version` column.
+- `WATCH/MULTI/EXEC` optimistic lock prevents the brain-split scenario where a Saga compensation thread and a normal processing thread race on the same order (interview doc 追问二).
+- `COMPLIANCE_HOLD` threshold is product-aware: `PREMIUM_FINANCING >= 1000 SGD`, `INVESTMENT >= 500 SGD`.
+
+### Financial Product Cart (ZSET)
+
+The `cart_zset` module implements a Redis ZSET-backed product basket for insurance and wealth products:
+
+```python
+from cce_platform.cart_zset import CartService, CartItem, ProductCode
+
+cart = CartService()   # Redis if REDIS_URL set, else local JSON
+cart.add_item("U0001", CartItem(product=ProductCode.INVESTMENT, amount=2100.0))
+cart.add_item("U0001", CartItem(product=ProductCode.INSURANCE,  amount=1380.0))
+ranked  = cart.get_ranked_items("U0001")      # INVESTMENT first (priority weight 8.0)
+expiring = cart.get_expiring_soon("U0001", within_minutes=15)  # quote expiry alert
+cart.merge_anonymous_cart("ANON-session-1", "U0001")# post-login merge
+snapshot = cart.snapshot_to_cdc_event("U0001")                 # feeds flink_cdc_pipeline
+```
+
+**Why three ZSETs per customer instead of one Hash:**
+
+| ZSET key | Score | Purpose |
+|----------|-------|---------|
+| `cart:items:{key}` | `add_ts` | Chronological order — default customer view |
+| `cart:priority:{key}` | product weight | RM/advisor ranked view (high-margin first) |
+| `cart:expiry:{key}` | `expiry_ts` | Quote expiry polling — `ZRANGEBYSCORE now deadline` |
+
+Financial product quotes have time-limited pricing (`INVESTMENT_LINKED` 30 min, `PREMIUM_FINANCING` 60 min). A plain Hash has no native range query on expiry; ZSET score makes expiry lookup O(log n + k).
+
+### Transactional Outbox + T+2 Settlement Scheduler
+
+The `outbox_publisher` module solves the "DB updated, Kafka send failed" atomicity problem and implements T+2 settlement scheduling with holiday awareness:
+
+```python
+from cce_platform.outbox_publisher import (
+    write_outbox_event, EventPublisher,
+    schedule_settlement, SettlementTrigger, HolidayCalendar,
+)
+
+# Step 1 — business code: same transaction as state change
+with connect() as conn:
+    conn.execute("UPDATE orders SET status='PAID' WHERE order_id=?",(order_id,))
+    write_outbox_event(conn, "order", order_id, "OrderPaid", {"amount": 288.0})
+    schedule_settlement(conn, order_id, customer_key, "INVESTMENT", 2100.0)
+    conn.commit()   # outbox row + settlement row committed atomically
+
+# Step 2 — background thread: EventPublisher polls and forwards
+publisher = EventPublisher()
+publisher.start_background()   # polls every 2s, marks SENT after downstream ACK
+
+# Step 3 — background thread: SettlementTrigger fires on T+2 date
+trigger = SettlementTrigger()
+trigger.start_background()     # polls every 10s, advances state machine on due settlements
+```
+
+**Why Transactional Outbox (interview doc 追问一):**
+
+Without it: `UPDATE orders` commits → process crashes before Kafka send → event lost forever, order stuck in `PAID` with no downstream notification.
+
+With it: the outbox row is committed in the same SQLite transaction. Even if the process restarts 100 times, `EventPublisher` will keep retrying until the downstream confirms. `event_id` (UUID5 of aggregate + type + timestamp) guarantees idempotent consumption.
+
+**T+2 Holiday Calendar:**
+
+```python
+cal = HolidayCalendar()           # SG + HK holidays 2025-2026 built in
+cal.settle_date(date(2026, 8, 21), t_plus=2)  # Friday → Tuesday 2026-08-25 (skips weekend)
+```
+
+Production: override the holiday set from Consul KV `cce/config/holiday_calendar` so typhoon closures or ad-hoc exchange halts take effect without a code deploy.
+
+| Product | T+N | Reason |
+|---------|-----|--------|
+| `PREMIUM_FINANCING` | T+2 | HKEX standard equities settlement |
+| `INVESTMENT` / `INVESTMENT_LINKED` | T+2 | Fund NAV calculation cycle |
+| `INSURANCE` | T+1 | Policy activation next business day |
+| `SAVINGS` / `CARD` / `TRAVEL_INSURANCE` | T+0 | Immediate activation |
+
 Detailed architecture material:
 
 ```text
@@ -174,6 +304,67 @@ The repository-level workflow is in:
 ```
 
 It installs dependencies, runs tests and builds Docker images for both PoCs.
+
+## Chaos Testing
+
+K8s chaos experiments and validation scripts are in `dev/chaos_testing/`.
+
+### Running the validation suite (no K8s cluster needed)
+
+```powershell
+cd 01_foundation/01_poc_pilot_users/dev/chaos_testing
+python validate_chaos.py --mode local
+```
+
+This runs 30 automated checks covering all new modules:
+
+| Check group | What it verifies |
+|-------------|------------------|
+| `state-machine` (8 checks) | Normal lifecycle, compliance hold, invalid transition rejection, idempotent init, saga compensation |
+| `flink-sim` (4 checks) | Deduplication of 6 duplicate events, intent score range [0,1], feature_source tag |
+| `online-store` (3 checks) | 8-thread concurrent writes, no corruption, all keys present |
+| `cart-zset` (7 checks) | Add/rank/expire/merge/clear/CDC snapshot |
+| `outbox` (8 checks) | Outbox PENDING→SENT, EventPublisher delivery, T+2 holiday calendar, settlement trigger lifecycle |
+
+To run a single check:
+
+```powershell
+python validate_chaos.py --mode local --check cart-zset
+python validate_chaos.py --mode local --check outbox
+python validate_chaos.py --mode local --check state-machine
+```
+
+### K8s Chaos Experiments (requires Chaos Mesh)
+
+```powershell
+# Apply all experiments
+kubectl apply -f k8s_manifests/chaos-experiments.yaml -n cce
+
+# Stop all experiments
+kubectl delete -f k8s_manifests/chaos-experiments.yaml -n cce
+```
+
+| Experiment | What it tests | Expected outcome |
+|------------|---------------|------------------|
+| `redis-brain-split` | Redis master-slave partition (60s) | Sentinel elects new leader in <40s, no dual-write |
+| `cce-redis-partition` | CCE pods lose Redis (90s) | Readiness probe returns 503, liveness restarts pod after 30s |
+| `cce-pod-kill-prestop-test` | Kill one pod every 3 min | preStop hook drains batch within 40s grace period, no half-written features |
+| `cce-kafka-high-latency` | 500ms ±100ms jitter to Kafka (120s) | Flink watermark advances correctly, no window stall |
+| `cce-disk-io-delay` | 200ms IO delay on /app/data (60s) | SQLite writes atomic (tmp replace), no JSON corruption |
+
+### preStop hook
+
+The deployment manifest `k8s_manifests/cce-deployment-with-prestop.yaml` adds:
+
+- `preStop` exec hook: POST `/admin/drain` → poll `/health` until `active_batches=0` → allow SIGTERM
+- `terminationGracePeriodSeconds: 40` (= preStop 25s + SIGTERM 5s + buffer 10s)
+- `/health/live` and `/health/ready` endpoints for K8s liveness/readiness probes
+- Pod anti-affinity to spread replicas across nodes (brain-split mitigation)
+- `PodDisruptionBudget` with `minAvailable: 1` so chaos experiments never fully disrupt the service
+
+**Why preStop is mandatory for financial batch workloads:**
+
+Without it, K8s sends SIGTERM immediately after removing the pod from Service endpoints. If `process_cdc_events()` is mid-way through `bulk_upsert()`, the online store is left half-written. The next run cannot distinguish which customer features were committed. The preStop hook gives the pod a guaranteed window to finish the current batch before termination.
 
 ## Design Notes
 

@@ -1,0 +1,244 @@
+# CCE Feature Platform — Production-grade K8s Deployment
+# Includes:
+#   - preStop hook (graceful CDC batch completion)
+#   - Redis anti-affinity (split-brain mitigation)
+#   - PodDisruptionBudget (chaos testing resilience baseline)
+#   - Liveness / Readiness probes (detect zombie pods post-network-partition)
+#
+# Apply: kubectl apply -f cce-deployment-with-prestop.yaml -n cce
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cce
+  labels:
+    app.kubernetes.io/part-of: cce-feature-platform
+
+---
+# ConfigMap holds non-secret runtime config.
+# Secrets (REDIS_URL, DB passwords) must come from Vault / K8s Secrets — never hardcoded.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cce-config
+  namespace: cce
+data:
+  CCE_ENV: "production"
+  KAFKA_BROKERS: "kafka-headless.kafka.svc.cluster.local:9092"
+  KAFKA_CDC_TOPIC: "cce.cdc.events"
+  REDIS_HOST: "redis-master.redis.svc.cluster.local"
+  REDIS_PORT: "6379"
+  # Grace period budget for preStop hook (must be < terminationGracePeriodSeconds)
+  PRESTOP_DRAIN_TIMEOUT_S: "25"
+  # Flink checkpoint interval
+  FLINK_CHECKPOINT_INTERVAL_MS: "30000"
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cce-feature-platform
+  namespace: ccelabels:
+    app: cce-feature-platform
+    version: "1.0"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: cce-feature-platform
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1   # chaos tests may already take 1 pod downmaxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: cce-feature-platform
+        version: "1.0"annotations:
+        # Prometheus scrape
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      # -----------------------------------------------------------------------
+      # Graceful termination budget:
+      #   terminationGracePeriodSeconds = preStop sleep (25s) + app SIGTERM (5s) + buffer (10s) = 40s
+      # -----------------------------------------------------------------------
+      terminationGracePeriodSeconds: 40
+
+      # -----------------------------------------------------------------------
+      # Anti-affinity: spread pods across nodes to avoid single-node brain split
+      # -----------------------------------------------------------------------
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: app
+                    operator: In
+                    values:
+                      - cce-feature-platformtopologyKey: kubernetes.io/hostname
+
+      containers:
+        - name: cce-app
+          image: cce-feature-platform:1.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8000
+
+          envFrom:
+            - configMapRef:
+                name: cce-config
+          env:
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: cce-secrets
+                  key: redis-url
+            - name: CCE_SQLITE_PATH
+              value: /app/data/warehouse/cce_platform.sqlite
+
+          # -----------------------------------------------------------------
+          # preStop hook — THE KEY ADDITION FOR FINANCIAL TRANSACTION SAFETY
+          #
+          # Problem without this hook:
+          #   K8s sends SIGTERM immediately after removing the pod from
+          #   Service endpoints.  If the pod is mid-way through:
+          #     - process_cdc_events() bulk_upsert → half-written feature store
+          #     - redis_state_machine.advance() MULTI/EXEC → aborted transaction
+          #     - Flink checkpoint → incomplete, causing reprocessing from last
+          #       good checkpoint on restart
+          #
+          # What this hook does:
+          #   1. Calls /admin/drain endpoint → app sets a "draining" flag,
+          #      stops accepting new CDC batches, finishes the current one.
+          #   2. Sleeps up to PRESTOP_DRAIN_TIMEOUT_S for in-flight work to complete.
+          #   3. K8s then sends SIGTERM; app exits cleanly.
+          #
+          # For Flink: the hook triggers a savepoint before termination so the
+          # job can resume from a known-good offset.
+          # -----------------------------------------------------------------
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - |
+                    echo "[preStop] Starting graceful drain at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+                    # 1. Signal app to stop accepting new work
+                    curl -sf -X POST http://localhost:8000/admin/drain \
+                      --max-time 5 \
+                      || echo "[preStop] WARNING: drain endpoint unreachable, proceeding with sleep"
+
+                    # 2. Wait for in-flight CDC batch / state machine ops to finish
+                    #    Poll the health endpoint for "draining: false" (batch done)
+                    TIMEOUT=${PRESTOP_DRAIN_TIMEOUT_S:-25}
+                    elapsed=0
+                    while [ $elapsed -lt $TIMEOUT ]; do
+                      STATUS=$(curl -sf http://localhost:8000/health | python3 -c \
+                        "import sys,json; d=json.load(sys.stdin); print(d.get('draining','true'))" \
+                        2>/dev/null || echo "true")
+                      if [ "$STATUS" = "False" ] || [ "$STATUS" = "false" ]; then
+                        echo "[preStop] Drain complete after ${elapsed}s"
+                        break
+                      fi
+                      sleep 2
+                      elapsed=$((elapsed + 2))
+                    done
+
+                    if [ $elapsed -ge $TIMEOUT ]; then
+                      echo "[preStop] WARNING: drain timed out after ${TIMEOUT}s — SIGTERM will follow"
+                    fi
+
+                    echo "[preStop] Done at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+          # -----------------------------------------------------------------
+          # Liveness probe: detects zombie pods after network partition.
+          # If a pod loses connectivity to Redis/Kafka but keeps running,
+          # liveness failure triggers a restart — preventing split-brain
+          # where a partitioned pod continues processing stale state.
+          # -----------------------------------------------------------------
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            failureThreshold: 3
+            timeoutSeconds: 5
+
+          # -----------------------------------------------------------------
+          # Readiness probe: removes pod from Service load balancer during
+          # chaos events (network partition, Redis failover) so no new
+          # requests are routed to a degraded pod.
+          # -----------------------------------------------------------------
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 2
+            timeoutSeconds: 3
+
+          # -----------------------------------------------------------------
+          # Startup probe: gives slow-start pods (e.g. after crash loop) time
+          # to initialise before liveness kicks in.
+          # -----------------------------------------------------------------
+          startupProbe:
+            httpGet:
+              path: /health/live
+              port: 8000
+            failureThreshold: 12
+            periodSeconds: 5
+
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+            limits:
+              cpu: "1000m"
+              memory: "512Mi"
+
+          volumeMounts:
+            - name: cce-data
+              mountPath: /app/datavolumes:
+        - name: cce-data
+          persistentVolumeClaim:
+            claimName: cce-data-pvc
+
+---
+# PodDisruptionBudget — baseline for chaos testing.
+# Guarantees at least 1 pod is always available during:
+#   - node drain (kubectl drain)
+#   - chaos-mesh PodKill / NetworkPartition experiments
+# Without this, a 2-replica deployment could be fully disrupted.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: cce-feature-platform-pdb
+  namespace: cce
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: cce-feature-platform
+
+---
+# PersistentVolumeClaim for SQLite + feature store files
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: cce-data-pvc
+  namespace: cce
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: standard

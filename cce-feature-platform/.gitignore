@@ -1,0 +1,25 @@
+# Hide internal roadmap structure from public repo
+01_foundation/
+02_extensions/
+03_business_insights/
+DELIVERY_PLAN.md
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Data & runtime
+data/warehouse/
+data/test_runtime/
+*.sqlite
+
+# Env
+.env
