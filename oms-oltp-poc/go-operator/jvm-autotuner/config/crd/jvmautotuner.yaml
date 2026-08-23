@@ -1,0 +1,130 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: jvmautotuners.jvm.oms.io
+  annotations:
+    # Generated from: api/v1alpha1/jvmautotuner_types.go
+    # Production: run `make manifests` (controller-gen) to regenerate.
+spec:
+  group: jvm.oms.io
+  names:
+    kind: JvmAutoTuner
+    listKind: JvmAutoTunerList
+    plural: jvmautotuners
+    singular: jvmautotuner
+    shortNames: [jat]
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Target
+          type: string
+          jsonPath: .spec.targetDeployment
+        - name: HeapPct
+          type: integer
+          jsonPath: .status.heapUsagePct
+        - name: XmxMB
+          type: integer
+          jsonPath: .status.currentXmxMB
+        - name: LastAction
+          type: string
+          jsonPath: .status.lastAction
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required:
+                - targetDeployment
+                - containerName
+                - prometheusURL
+                - heapQuery
+                - scaleUpThreshold
+                - scaleDownThreshold
+                - minHeapMB
+                - maxHeapMB
+                - stepMB
+              properties:
+                targetDeployment:
+                  type: string
+                  description: Name of the Deployment to auto-tune.
+                targetNamespace:
+                  type: string
+                  description: Namespace of the target Deployment. Defaults to CR namespace.
+                containerName:
+                  type: string
+                  description: Container name whose JAVA_OPTS will be patched.
+                prometheusURL:
+                  type: string
+                  description: Prometheus API base URL (e.g. http://prometheus:9090).
+                heapQuery:
+                  type: string
+                  description: PromQL expression returning heap used bytes for the target pods.
+                maxHeapQuery:
+                  type: string
+                  description: Optional PromQL for committed/max heap bytes. Falls back to maxHeapMB.
+                scaleUpThreshold:
+                  type: integer
+                  minimum: 1
+                  maximum: 99
+                  description: Heap usage % above which -Xmx is increased.
+                scaleDownThreshold:
+                  type: integer
+                  minimum: 1
+                  maximum: 99
+                  description: Heap usage % below which -Xmx is decreased.
+                minHeapMB:
+                  type: integer
+                  minimum: 128
+                  description: Lower bound for -Xmx in megabytes.
+                maxHeapMB:
+                  type: integer
+                  description: Upper bound for -Xmx in megabytes.
+                stepMB:
+                  type: integer
+                  minimum: 64
+                  description: Megabytes to adjust -Xmx by per reconcile cycle.
+                reconcilePeriod:
+                  type: string
+                  description: How often to reconcile (Go duration string, e.g. "5m"). Default 5m.
+            status:
+              type: object
+              properties:
+                currentXmxMB:
+                  type: integer
+                  description: Most recently applied -Xmx value in MB.
+                heapUsagePct:
+                  type: integer
+                  description: Heap usage percentage observed in the last reconcile.
+                lastTunedAt:
+                  type: string
+                  format: date-time
+                  description: Timestamp of the last reconcile that changed JAVA_OPTS.
+                lastAction:
+                  type: string
+                  description: Human-readable description of the last reconcile decision.
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    required: [type, status]
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
