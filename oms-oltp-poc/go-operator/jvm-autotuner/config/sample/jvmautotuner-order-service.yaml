@@ -1,0 +1,38 @@
+apiVersion: jvm.oms.io/v1alpha1
+kind: JvmAutoTuner
+metadata:
+  name: order-service-gc-tuner
+  namespace: oms-prod
+spec:
+  # Target: the order-service Deployment in the same namespace.
+  targetDeployment: order-service
+  containerName:    order-service
+
+  prometheusURL: http://prometheus-operated.monitoring.svc.cluster.local:9090
+
+  # Average heap used across all order-service pods.
+  heapQuery: >-
+    avg(jvm_memory_used_bytes{
+      area="heap",
+      namespace="oms-prod",
+      pod=~"order-service-.*"
+    })
+
+  # Committed heap ≈ current -Xmx for G1GC / ZGC (more accurate than maxHeapMB).
+  maxHeapQuery: >-
+    avg(jvm_memory_committed_bytes{
+      area="heap",
+      namespace="oms-prod",
+      pod=~"order-service-.*"
+    })
+
+  # Tuning band: stay between 40 % and 80 % utilisation.
+  scaleUpThreshold:   80   # heap > 80 % → increase -Xmx
+  scaleDownThreshold: 40   # heap < 40 % → decrease -Xmx
+
+  minHeapMB:  512
+  maxHeapMB: 4096
+  stepMB:     256   # adjust by 256 MB each cycle
+
+  # Re-evaluate every 5 minutes; one Deployment rolling update per window.
+  reconcilePeriod: "5m"
