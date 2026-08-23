@@ -1,0 +1,205 @@
+# CCE Chaos Testing Experiments — Chaos Mesh manifests
+#
+# Covers:
+#   1. NetworkChaos — Brain Split (Redis主从分区)
+#   2. NetworkChaos — CCE Pod与Redis网络分区
+#   3. PodChaos    — Pod随机Kill (验证preStop钩子)
+#   4. NetworkChaos — 高延迟注入 (验证超时/熔断)
+#   5. IOChaos      — 磁盘IO延迟 (验证SQLite写入韧性)
+#
+# 前置条件:
+#   kubectl apply -f https://mirrors.chaos-mesh.org/v2.6.3/crd.yaml
+#   helm install chaos-mesh chaos-mesh/chaos-mesh -n chaos-testing --create-namespace
+#
+# 运行单个实验:
+#   kubectl apply -f chaos-experiments.yaml -n cce
+# 停止实验:
+#   kubectl delete -f chaos-experiments.yaml -n cce
+
+# =============================================================================
+# 实验1: Redis主从脑裂 — 切断master与slave之间的网络
+# 验证目标:
+#   - Redis Sentinel是否在<30s内完成leader重新选举
+#   - CCE app是否在Redis failover期间正确处理READONLY错误
+#   - 不应出现双写: 两个Redis节点同时接受写入
+#   - 状态机事务不应在分区期间丢失
+# 预期结果: Sentinel完成选举, app自动重连新master, 无数据丢失
+# =============================================================================
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: redis-brain-split
+  namespace: cce
+  annotations:
+    experiment/description: "Redis master-slave network partition to test brain-split resilience"
+    experiment/blast-radius: "redis cluster only"
+    experiment/rollback: "kubectl delete networkchaos redis-brain-split -n cce"
+spec:
+  action: partition
+  mode: one   # target one pod at a time
+  selector:
+    namespaces:
+      - redis
+    labelSelectors:
+      "app": "redis"
+      "role": "slave"   # partition slave from master
+  direction: both       # bidirectional: master cannot reach slave AND slave cannot reach master
+  duration: "60s"       # 1 minute partition — long enough for Sentinel to trigger election
+  target:
+    mode: one
+    selector:
+      namespaces:
+        - redis
+      labelSelectors:
+        "app": "redis"
+        "role": "master"
+  scheduler:
+    cron: "@once"       # manual trigger, not recurring
+
+---
+# =============================================================================
+# 实验2: CCE App与Redis完全网络隔离
+# 验证目标:
+#   - preStop钩子是否在Redis不可达时仍能完成 (不应永久挂起)
+#   - readiness probe是否在Redis失连后正确摘除Pod出Service
+#   - liveness probe是否在持续失连后触发Pod重启 (防止僵尸Pod)
+#   - LocalOnlineStore fallback是否激活 (PoC模式)
+# 预期结果: Pod被摘出LB, 30s后liveness失败, Pod重启, 重连Redis
+# =============================================================================
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: cce-redis-partition
+  namespace: cce
+  annotations:
+    experiment/description: "Partition CCE app pods from Redis to test readiness/liveness probe behavior"
+    experiment/blast-radius: "cce namespace, redis namespace"
+    experiment/rollback: "kubectl delete networkchaos cce-redis-partition -n cce"
+spec:
+  action: partition
+  mode: all
+  selector:
+    namespaces:
+      - cce
+    labelSelectors:
+      "app": "cce-feature-platform"
+  direction: both
+  duration: "90s"   # > liveness failureThreshold (3×10s=30s) to trigger restart
+  target:
+    mode: all
+    selector:
+      namespaces:
+        - redis
+      labelSelectors:
+        "app": "redis"
+  scheduler:
+    cron: "@once"
+
+---
+# =============================================================================
+# 实验3: Pod随机Kill — 验证preStop钩子在强制终止前完成
+# 验证目标:
+#   - preStop脚本是否在terminationGracePeriodSeconds(40s)内执行完毕
+#   - 被Kill的Pod是否在重启后从正确的checkpoint恢复CDC处理
+#   - 状态机中的in-flight事务是否有正确的幂等性保护
+#   - Redis ZSET历史是否完整 (无状态丢失)
+# 预期结果: Pod重启后feature store状态完整, 无重复计费
+# =============================================================================
+apiVersion: chaos-mesh.org/v1alpha1
+kind: PodChaos
+metadata:
+  name: cce-pod-kill-prestop-test
+  namespace: cce
+  annotations:
+    experiment/description: "Kill CCE pods to validate preStop hook completes within grace period"
+    experiment/blast-radius: "one cce pod at a time"
+    experiment/rollback: "kubectl delete podchaos cce-pod-kill-prestop-test -n cce"
+spec:
+  action: pod-kill
+  mode: one
+  selector:
+    namespaces:
+      - cce
+    labelSelectors:
+      "app": "cce-feature-platform"
+  gracePeriod: 40   # must match terminationGracePeriodSeconds in deployment
+  duration: "300s"  # run for 5 minutes
+  scheduler:
+    cron: "*/3 * * * *"   # kill one pod every 3 minutes
+
+---
+# =============================================================================
+# 实验4: 高延迟注入 — CCE到Kafka的网络延迟
+# 验证目标:
+#   - Flink watermark是否在高延迟下正确推进 (防止窗口永不触发)
+#   - CDC事件处理的端到端延迟SLA (目标 <5s P99)
+#   - Kafka consumer group是否在延迟下触发rebalance
+#   - TransactionStateMachine的WATCH超时是否处理正确
+# 预期结果: 延迟期间特征更新变慢但不丢失, 延迟恢复后追上
+# =============================================================================
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: cce-kafka-high-latency
+  namespace: cce
+  annotations:
+    experiment/description: "Inject 500ms latency between CCE and Kafka to test watermark and timeout handling"
+    experiment/blast-radius: "cce-kafka traffic only"
+    experiment/rollback: "kubectl delete networkchaos cce-kafka-high-latency -n cce"
+spec:
+  action: delay
+  mode: all
+  selector:
+    namespaces:
+      - cce
+    labelSelectors:
+      "app": "cce-feature-platform"
+  delay:
+    latency: "500ms"
+    correlation: "75"   # 75% correlation between packets (realistic jitter)
+    jitter: "100ms"
+  direction: to
+  target:
+    mode: all
+    selector:
+      namespaces:
+        - kafka
+      labelSelectors:
+        "app": "kafka"
+  duration: "120s"
+  scheduler:
+    cron: "@once"
+
+---
+# =============================================================================
+# 实验5: 磁盘IO延迟 — SQLite写入韧性 (PoC/本地模式)
+# 验证目标:
+#   - bulk_upsert的原子性: tmp文件替换是否在IO延迟下仍然原子
+#   - pipeline.build_gold()的写入是否在IO慢时正确重试
+#   - 不应产生损坏的sqlite文件
+# 预期结果: 写入变慢但数据完整, 无损坏文件
+# =============================================================================
+apiVersion: chaos-mesh.org/v1alpha1
+kind: IOChaos
+metadata:
+  name: cce-disk-io-delay
+  namespace: cce
+  annotations:
+    experiment/description: "Inject disk IO delay to test SQLite and file-based store atomicity"
+    experiment/blast-radius: "cce pod /app/data volume only"
+    experiment/rollback: "kubectl delete iochaos cce-disk-io-delay -n cce"
+spec:
+  action: latency
+  mode: one
+  selector:
+    namespaces:
+      - cce
+    labelSelectors:
+      "app": "cce-feature-platform"
+  volumePath: /app/data
+  path: "**/*.json"    # target online store JSON files
+  delay: "200ms"
+  percent: 80          # 80% of IO operations get delayed
+  duration: "60s"
+  scheduler:
+    cron: "@once"

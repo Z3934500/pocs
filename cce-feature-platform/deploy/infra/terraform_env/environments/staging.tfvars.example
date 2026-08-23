@@ -1,0 +1,18 @@
+environment = "staging"
+aws_region  = "ap-southeast-1"
+
+private_subnet_ids      = ["subnet-staging-a", "subnet-staging-b"]
+msk_security_group_id   = "sg-staging-msk"
+redis_security_group_id = "sg-staging-redis"
+
+msk_broker_count    = 2
+msk_instance_type   = "kafka.t3.small"
+msk_ebs_volume_gb   = 200
+redis_node_type     = "cache.t4g.small"
+redis_replica_count = 1
+apply_immediately   = true
+
+tags = {
+  CostCenter = "cce-staging"
+  Owner      = "data-platform"
+}

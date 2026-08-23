@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
@@ -10,8 +11,18 @@ from fastapi.staticfiles import StaticFiles
 from .batch_importer import export_gold_features_to_online_store
 from .config import settings
 from .db import connect, init_schema
+from .metrics import MetricsMiddleware, metrics_response, record_business
 from .online_store import LocalOnlineStore
 from .pipeline import run_pipeline
+
+# ---------------------------------------------------------------------------
+# Graceful drain state — used by preStop hook
+# ---------------------------------------------------------------------------
+# _draining=True  → pod is shutting down; reject new CDC/pipeline work
+# _draining=False → pod is ready; active batch counter reaches 0 = safe to kill
+_draining = False
+_active_batches = 0
+_drain_lock = threading.Lock()
 
 
 app = FastAPI(
@@ -26,6 +37,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(MetricsMiddleware)
 
 
 def ensure_data() -> None:
@@ -53,6 +65,67 @@ def rows(query: str, params: tuple = ()) -> list[dict]:
         return [dict(row) for row in conn.execute(query, params).fetchall()]
 
 
+@app.get("/metrics", include_in_schema=False)
+def metrics():
+    return metrics_response()
+
+
+# ---------------------------------------------------------------------------
+# Health endpoints — consumed by K8s liveness / readiness probes
+# and the preStop drain script
+# ---------------------------------------------------------------------------
+
+@app.get("/health/live", include_in_schema=False)
+def health_live() -> dict[str, object]:
+    """Liveness probe: returns 200 as long as the process is alive.
+    On network-partition chaos tests, if dependencies are unreachable for
+    > failureThreshold periods K8s restarts the pod.
+    """
+    return {"status": "alive"}
+
+
+@app.get("/health/ready", include_in_schema=False)
+def health_ready() -> dict[str, object]:
+    """Readiness probe: returns 200 only when the pod is ready to serve traffic.
+    Returns 503 while draining (preStop in progress) so K8s removes the pod
+    from the Service load balancer before SIGTERM arrives.
+    """
+    if _draining:
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            status_code=503,
+            content={"status": "draining", "active_batches": _active_batches},
+        )
+    return {"status": "ready", "active_batches": _active_batches}
+
+
+@app.post("/admin/drain", include_in_schema=False)
+def admin_drain() -> dict[str, object]:
+    """Called by the preStop hook to begin graceful shutdown.
+    Sets draining=True so:
+      - /health/ready returns 503 (pod removed from LB immediately)
+      - new pipeline/CDC requests are rejected with 503
+      - preStop script polls /health until active_batches == 0
+    """
+    global _draining
+    with _drain_lock:
+        _draining = True
+    return {"draining": True, "active_batches": _active_batches}
+
+
+@app.get("/health", include_in_schema=False)
+def health_combined() -> dict[str, object]:
+    """Combined health endpoint polled by the preStop shell script.
+    The script checks .draining == false to know the pod is safe to terminate.
+    """
+    return {
+        "status": "draining" if _draining else "ok",
+        "draining": _draining,
+        "active_batches": _active_batches,
+        "database": str(settings.sqlite_path),
+    }
+
+
 @app.get("/api/health")
 def health() -> dict[str, str]:
     ensure_data()
@@ -61,7 +134,26 @@ def health() -> dict[str, str]:
 
 @app.post("/api/pipeline/run")
 def run_pipeline_api() -> dict[str, object]:
-    return {"status": "completed", "counts": run_pipeline(reset=True)}
+    """Run the medallion pipeline.  Rejected during graceful drain."""
+    global _active_batches
+    if _draining:
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            status_code=503,
+            content={"error": "pod is draining, retry on another instance"},
+        )
+    with _drain_lock:
+        _active_batches += 1
+    try:
+        counts = run_pipeline(reset=True)
+        record_business("pipeline_run", "success")
+        return {"status": "completed", "counts": counts}
+    except Exception:
+        record_business("pipeline_run", "failure")
+        raise
+    finally:
+        with _drain_lock:
+            _active_batches -= 1
 
 
 @app.get("/api/summary")
