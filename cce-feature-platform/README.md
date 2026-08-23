@@ -199,7 +199,7 @@ PENDING → RISK_CHECK → COMPLIANCE_HOLD ┐
 
 - `ZRANGEBYSCORE` gives the full audit trail in O(log n) — required for financial regulatory review.
 - Score = Unix timestamp microseconds: natural ordering without a separate `version` column.
-- `WATCH/MULTI/EXEC` optimistic lock prevents the brain-split scenario where a Saga compensation thread and a normal processing thread race on the same order (interview doc 追问二).
+- `WATCH/MULTI/EXEC` optimistic lock prevents the brain-split scenario where a Saga compensation thread and a normal processing thread race on the same order.
 - `COMPLIANCE_HOLD` threshold is product-aware: `PREMIUM_FINANCING >= 1000 SGD`, `INVESTMENT >= 500 SGD`.
 
 ### Financial Product Cart (ZSET)
@@ -254,7 +254,7 @@ trigger = SettlementTrigger()
 trigger.start_background()     # polls every 10s, advances state machine on due settlements
 ```
 
-**Why Transactional Outbox (interview doc 追问一):**
+**Why Transactional Outbox:**
 
 Without it: `UPDATE orders` commits → process crashes before Kafka send → event lost forever, order stuck in `PAID` with no downstream notification.
 
