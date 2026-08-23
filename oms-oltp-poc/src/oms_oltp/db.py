@@ -161,6 +161,13 @@ def transaction(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
 
 def reset_tables(conn: sqlite3.Connection) -> None:
     table_names = [
+        # Security tables depend on orders/customers and must be cleared first.
+        "data_export_audit",
+        "payment_ledger_entries",
+        "settlement_records",
+        "payment_callbacks",
+        "payment_intents",
+        "customer_data_policies",
         "saga_log",
         "outbox_events",
         "order_status_history",
@@ -173,7 +180,12 @@ def reset_tables(conn: sqlite3.Connection) -> None:
         "customers",
     ]
     for table_name in table_names:
-        conn.execute(f"DELETE FROM {table_name}")
+        exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (table_name,),
+        ).fetchone()
+        if exists:
+            conn.execute(f"DELETE FROM {table_name}")
 
 
 def seed_reference_data(conn: sqlite3.Connection, *, reset: bool = False) -> None:
