@@ -168,7 +168,7 @@ python -m cce_platform.flink_cdc_pipeline submit --kafka-brokers localhost:9092
 | Fraud velocity check (5 transactions in 5 minutes) | Flink CEP `Pattern.begin().times(5).within(5 min)`; impossible in a periodic batch job |
 | `PREMIUM_FINANCING` / `INVESTMENT` amounts must not be double-billed | Flink exactly-once sink with Redis `MULTI/EXEC` per checkpoint boundary |
 
-The module degrades gracefully: if `REDIS_URL` is not set the sink writes to `LocalOnlineStore`; if PyFlink is not installed the `submit` command raises a clear error while `run` still works.
+Fallback is explicit rather than automatic: `run` mode simulates the pipeline locally and writes to `LocalOnlineStore`, while `submit` mode targets a Flink cluster and requires a reachable Redis — its sink raises on a missing `redis-py` or an unreachable host instead of no-opping, so a job cannot report RUNNING while discarding every feature update. If PyFlink is not installed the `submit` command raises a clear error while `run` still works.
 
 ### Financial Transaction State Machine
 
@@ -177,7 +177,7 @@ The `redis_state_machine` module implements a ZSET-backed state machine for fina
 ```python
 from cce_platform.redis_state_machine import TransactionStateMachine, TxnState
 
-sm = TransactionStateMachine()   # Redis if REDIS_URL set, else local JSON
+sm = TransactionStateMachine()   # Redis if REDIS_URL set; local JSON only where the fallback is allowed
 sm.init_transaction("TXN-001", amount=1700.0, product="PREMIUM_FINANCING", customer_key="U0005")
 sm.run_auto_advance("TXN-001")   # PENDING → RISK_CHECK → COMPLIANCE_HOLD → APPROVED
 sm.advance("TXN-001", TxnState.PENDING_SETTLE, actor="scheduler")
@@ -199,7 +199,7 @@ PENDING → RISK_CHECK → COMPLIANCE_HOLD ┐
 
 - `ZRANGEBYSCORE` gives the full audit trail in O(log n) — required for financial regulatory review.
 - Score = Unix timestamp microseconds: natural ordering without a separate `version` column.
-- `WATCH/MULTI/EXEC` optimistic lock prevents the brain-split scenario where a Saga compensation thread and a normal processing thread race on the same order.
+- `WATCH/MULTI/EXEC` optimistic lock prevents the brain-split scenario where a Saga compensation thread and a normal processing thread race on the same order (interview doc 追问二).
 - `COMPLIANCE_HOLD` threshold is product-aware: `PREMIUM_FINANCING >= 1000 SGD`, `INVESTMENT >= 500 SGD`.
 
 ### Financial Product Cart (ZSET)
@@ -209,7 +209,7 @@ The `cart_zset` module implements a Redis ZSET-backed product basket for insuran
 ```python
 from cce_platform.cart_zset import CartService, CartItem, ProductCode
 
-cart = CartService()   # Redis if REDIS_URL set, else local JSON
+cart = CartService()   # Redis if REDIS_URL set; local JSON only where the fallback is allowed
 cart.add_item("U0001", CartItem(product=ProductCode.INVESTMENT, amount=2100.0))
 cart.add_item("U0001", CartItem(product=ProductCode.INSURANCE,  amount=1380.0))
 ranked  = cart.get_ranked_items("U0001")      # INVESTMENT first (priority weight 8.0)
@@ -254,7 +254,7 @@ trigger = SettlementTrigger()
 trigger.start_background()     # polls every 10s, advances state machine on due settlements
 ```
 
-**Why Transactional Outbox:**
+**Why Transactional Outbox (interview doc 追问一):**
 
 Without it: `UPDATE orders` commits → process crashes before Kafka send → event lost forever, order stuck in `PAID` with no downstream notification.
 
