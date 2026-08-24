@@ -31,7 +31,7 @@ Current delivery shape:
 
 - Terraform exists for the after-MVP2 real-time extension, but it currently provisions MSK and ElastiCache Redis only. It does not yet create EKS/AKS, RDS, S3/Glue/EMR or Airflow infrastructure.
 - Helm exists as an optional application chart for the same CCE API runtime. It is not currently the main path for shared middleware such as Nginx Ingress.
-- Kustomize overlays are the clearest application deployment path today. The dev, staging and production overlays patch namespace, image tag, replica count and `CCE_RUNTIME_ENV`.
+- Kustomize overlays are the clearest application deployment path today. `k8s/base/` holds the shared manifests, and the dev, staging and production overlays patch namespace, image tag, HPA min/max and the `CCE_RUNTIME_ENV` / `CCE_REQUIRE_REDIS` pair. They do not patch `spec.replicas`, which the HPA owns. The `cce-gold-to-redis-importer` CronJob is a separate pod spec, so each overlay patches its env explicitly instead of inheriting the Deployment's.
 - CI/CD examples exist for GitHub Actions, GitLab CI and Jenkins. GitLab/Jenkins can deploy the Kustomize overlays after test and image build stages.
 
 Current runtime scale:
@@ -137,14 +137,53 @@ GET /api/lineage
 
 ## Real-Time Feature Demo
 
-After running the batch pipeline, load Gold features into the local online store and apply CDC-style updates:
+After running the batch pipeline, load Gold features into the online store and apply CDC-style updates:
 
 ```powershell
 python -m cce_platform.batch_importer --replace
 python -m cce_platform.realtime run
 ```
 
-The local online store is a JSON-backed stand-in for Redis. The production discussion maps it to Debezium + MSK + EKS stream job + ElastiCache.
+The importer is the last hop of the batch feature path, not the thing that computes features:
+
+```text
+Databricks medallion job -> Delta Gold tables -> batch_importer -> ElastiCache
+```
+
+Locally it reads the SQLite Gold tables the pipeline just built. When `DATABRICKS_HOST`,
+`DATABRICKS_TOKEN` and `DATABRICKS_HTTP_PATH` are all set it instead queries the Unity Catalog
+Gold tables (`cce.gold.customer_features` joined to `cce.gold.customer_model_scores`) over a SQL
+warehouse. Either way it only publishes; Bronze -> Silver -> Gold happens upstream.
+
+The destination is chosen the same way in every writer. `make_online_store()` returns
+`RedisOnlineStore` when `REDIS_URL` is set and reachable, otherwise `LocalOnlineStore`, a
+JSON-backed stand-in. Both write one HASH per customer under `cce:features:{unified_customer_key}`,
+which is the same key namespace the Flink sink uses — so batch (T+1 Gold) and stream (realtime CDC)
+land on the same keys and merge field by field, with `feature_source` recording which path wrote
+last. `GET /api/online-features/{key}` reads through the selected backend rather than assuming the
+local file, so a Redis-backed deployment serves what the importer actually published.
+
+### When the online store is unreachable
+
+`CCE_RUNTIME_ENV` and `CCE_REQUIRE_REDIS` decide whether a missing Redis is a startup failure or a
+supported local mode:
+
+| `CCE_RUNTIME_ENV` | `CCE_REQUIRE_REDIS` | Behaviour when Redis is unset or unreachable |
+| --- | --- | --- |
+| `local` (default) | unset | Falls back to `LocalOnlineStore` and logs a warning |
+| `staging` / `production` | unset | Raises at startup — the pod does not become Ready |
+| any | `false` | Falls back, explicitly opted in |
+
+The overlays currently set `CCE_REQUIRE_REDIS=false` because MVP1 has no way to provision Redis:
+the Terraform in this repository creates MSK and ElastiCache for the after-MVP2 extension only.
+That is a deliberate MVP1 choice — single-node and development use, no consistency guarantee across
+replicas — and it is the line to remove first when a real Redis exists.
+
+Multiple replicas are safe for the Feature API on the local fallback because everything it serves
+is derived read-only data: SQLite and the online store are both rebuilt from the deterministic Gold
+pipeline, so every pod computes the same result. That does not extend to `cart_zset` or
+`redis_state_machine`, which hold authoritative mutable state that no pod can recompute. Neither is
+wired into `api.py` today; their module docstrings carry the same warning.
 
 ### Flink CDC Pipeline (Extension)
 
@@ -259,6 +298,22 @@ trigger.start_background()     # polls every 10s, advances state machine on due 
 Without it: `UPDATE orders` commits → process crashes before Kafka send → event lost forever, order stuck in `PAID` with no downstream notification.
 
 With it: the outbox row is committed in the same SQLite transaction. Even if the process restarts 100 times, `EventPublisher` will keep retrying until the downstream confirms. `event_id` (UUID5 of aggregate + type + timestamp) guarantees idempotent consumption.
+
+**Concurrent writers against SQLite:**
+
+Both background threads poll while request handlers write, so the warehouse connection sets
+`journal_mode=WAL` and `busy_timeout=5000`. Under the default rollback journal a reader blocks
+writers, and a writer that finds the database locked fails immediately with `database is locked`
+rather than waiting — with a 2s publisher poll and a 10s settlement poll that collision is routine,
+not a load-test artifact. WAL lets readers proceed during a write, and the busy timeout turns the
+remaining overlap into a short wait instead of an error. This is a local-development property, not
+a substitute for the OLTP layer: no RDS or Aurora is in scope yet, which is why SQLite is here at
+all.
+
+`SettlementTrigger` also constructs `TransactionStateMachine` once and caches it. Each construction
+builds a connection pool and pings Redis, and the helper is called once per `run_once()` plus once
+per `complete_settlement()` — that is every 10s poll for the life of the loop. Building it per call
+also changes a Redis outage from "fails once at startup" into "raises on every poll".
 
 **T+2 Holiday Calendar:**
 
