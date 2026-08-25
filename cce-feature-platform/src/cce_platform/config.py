@@ -15,6 +15,12 @@ class Settings:
     online_store_path: Path
     cdc_events_path: Path
     frontend_dir: Path
+    runtime_env: str
+    require_redis: bool
+
+
+def _parse_bool(raw: str) -> bool:
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def load_settings() -> Settings:
@@ -29,6 +35,18 @@ def load_settings() -> Settings:
     if not cdc_events_path.is_absolute():
         cdc_events_path = base_dir / cdc_events_path
 
+    runtime_env = os.getenv("CCE_RUNTIME_ENV", "local").strip().lower()
+    # Falling back to the local JSON store is correct for the PoC but wrong for
+    # a deployed environment: the fallback is per-process, so replicas silently
+    # diverge instead of sharing state. Staging and production therefore require
+    # a reachable Redis by default; CCE_REQUIRE_REDIS overrides either way.
+    require_redis_raw = os.getenv("CCE_REQUIRE_REDIS")
+    require_redis = (
+        _parse_bool(require_redis_raw)
+        if require_redis_raw is not None
+        else runtime_env in {"staging", "production"}
+    )
+
     return Settings(
         base_dir=base_dir,
         sqlite_path=sqlite_path,
@@ -38,6 +56,8 @@ def load_settings() -> Settings:
         online_store_path=online_store_path,
         cdc_events_path=cdc_events_path,
         frontend_dir=base_dir / "frontend",
+        runtime_env=runtime_env,
+        require_redis=require_redis,
     )
 
 

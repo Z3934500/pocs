@@ -20,6 +20,18 @@ Key设计：
 
 本地PoC用_LocalStateStore（来自redis_state_machine）回退，无需Redis集群。
 
+Replica constraint:
+  The local fallback is per-process, so carts are NOT shared between pods.
+  Unlike the Feature API — which serves derived read-only data that every pod
+  rebuilds identically from the deterministic gold pipeline — a cart is
+  authoritative mutable state. Serving it from more than one replica on the
+  local backend would give each pod its own basket, so a customer would see a
+  different cart depending on which pod handled the request, breaking the
+  cross-device sync promise above. This module is not wired into api.py today.
+  Before exposing it over HTTP in a multi-replica deployment, provision a real
+  Redis and leave CCE_REQUIRE_REDIS unset so staging and production fail fast
+  instead of degrading (see config.py).
+
 用法：
   from cce_platform.cart_zset import CartService, CartItem, ProductCodecart = CartService()
   cart.add_item("U0001", CartItem(product=ProductCode.INSURANCE, amount=1380.0, quote_valid_minutes=30))
@@ -245,15 +257,32 @@ class CartService:
         self,
         redis_url: str | None = None,
         local_store_path: Path | None = None,) -> None:
+        from .config import settings
+
         url = redis_url or os.getenv("REDIS_URL")
         if url:
             try:
                 self._backend, self._mode = self._make_redis(url), "redis"
                 logger.info("CartService: Redis backend at %s", url)
             except Exception as exc:
+                if settings.require_redis:
+                    # The local backend is per-process: degrading here would give
+                    # each replica its own cart, so a customer's basket would
+                    # change depending on which pod served the request.
+                    raise RuntimeError(
+                        f"CartService: Redis at {url} is unreachable ({exc}) and "
+                        f"CCE_RUNTIME_ENV={settings.runtime_env} requires it. "
+                        "Set CCE_REQUIRE_REDIS=false to allow the local-file fallback."
+                    ) from exc
                 logger.warning("CartService: Redis unavailable (%s), using local store", exc)
                 self._backend = self._make_local(local_store_path)
                 self._mode = "local"
+        elif settings.require_redis:
+            raise RuntimeError(
+                f"CartService: REDIS_URL is not set but CCE_RUNTIME_ENV="
+                f"{settings.runtime_env} requires Redis. "
+                "Set CCE_REQUIRE_REDIS=false to allow the local-file fallback."
+            )
         else:
             self._backend = self._make_local(local_store_path)
             self._mode = "local"

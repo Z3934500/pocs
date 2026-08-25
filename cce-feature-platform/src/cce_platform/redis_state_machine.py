@@ -9,7 +9,18 @@ Design:
   - Current state is ZREVRANGE key 0 0 (highest score = latest)
   - Full audit trail is ZRANGE key 0 -1 WITHSCORES
   - Optimistic concurrency via WATCH + MULTI/EXEC (no lost updates under concurrent writers)
-  - Fallback to LocalOnlineStore when Redis is unavailable (PoC / CI mode)
+  - Fallback to a local JSON file when Redis is unavailable (PoC / CI mode)
+
+Replica constraint:
+  The local fallback is per-process, so transaction state is NOT shared between
+  pods. Unlike the Feature API — which serves derived read-only data that every
+  pod rebuilds identically from the deterministic gold pipeline — this module
+  holds authoritative mutable state. Serving it from more than one replica on
+  the local backend would split the state history: a transaction advanced on one
+  pod would be invisible, or appear stale, on another. This module is not wired
+  into api.py today. Before exposing it over HTTP in a multi-replica deployment,
+  provision a real Redis and leave CCE_REQUIRE_REDIS unset so staging and
+  production fail fast instead of degrading (see config.py).
 
 State machine (matches CCE product types):
   PENDING → RISK_CHECK → APPROVED  → SETTLED       ↘ COMPLIANCE_HOLD → APPROVED → SETTLED
@@ -233,7 +244,11 @@ class TransactionStateMachine:
 
     Instantiation order:
       1. If REDIS_URL env var is set and redis-py is installed → Redis backend
-      2. Otherwise → local JSON file backend (PoC mode)
+      2. Otherwise → local JSON file backend (PoC mode), unless
+         settings.require_redis is set, in which case construction raises
+
+    The local backend is per-process and therefore single-replica only; see the
+    module docstring for the replica constraint.
 
     All public methods are safe to call from multiple threads (GIL covers the
     local backend; Redis backend uses WATCH/MULTI/EXEC for optimistic locking).
@@ -246,6 +261,8 @@ class TransactionStateMachine:
         redis_url: str | None = None,
         local_store_path: Path | None = None,
     ) -> None:
+        from .config import settings
+
         url = redis_url or os.getenv("REDIS_URL")
         if url:
             try:
@@ -253,11 +270,25 @@ class TransactionStateMachine:
                 self._mode = "redis"
                 logger.info("TransactionStateMachine: using Redis backend at %s", url)
             except Exception as exc:
+                if settings.require_redis:
+                    # The local backend is per-process, so degrading here would
+                    # let each replica keep its own divergent transaction state.
+                    raise RuntimeError(
+                        f"TransactionStateMachine: Redis at {url} is unreachable ({exc}) and "
+                        f"CCE_RUNTIME_ENV={settings.runtime_env} requires it. "
+                        "Set CCE_REQUIRE_REDIS=false to allow the local-file fallback."
+                    ) from exc
                 logger.warning(
                     "TransactionStateMachine: Redis unavailable (%s), falling back to local store", exc
                 )
                 self._backend = self._make_local(local_store_path)
                 self._mode = "local"
+        elif settings.require_redis:
+            raise RuntimeError(
+                f"TransactionStateMachine: REDIS_URL is not set but CCE_RUNTIME_ENV="
+                f"{settings.runtime_env} requires Redis. "
+                "Set CCE_REQUIRE_REDIS=false to allow the local-file fallback."
+            )
         else:
             self._backend = self._make_local(local_store_path)
             self._mode = "local"

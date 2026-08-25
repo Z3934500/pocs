@@ -413,10 +413,16 @@ class SettlementTrigger:
         self._stop_event = threading.Event()
 
     def _get_state_machine(self):
-        if self._sm is not None:
-            return self._sm
-        from .redis_state_machine import TransactionStateMachine
-        return TransactionStateMachine()
+        # Cached after first construction. TransactionStateMachine() builds a
+        # connection pool and pings Redis on every instantiation, and this
+        # helper is called once per run_once() plus once per
+        # complete_settlement() — i.e. every POLL_INTERVAL_S seconds for the
+        # lifetime of the loop. Constructing it per call also moves a Redis
+        # outage from "fails once at startup" to "raises on every poll".
+        if self._sm is None:
+            from .redis_state_machine import TransactionStateMachine
+            self._sm = TransactionStateMachine()
+        return self._sm
 
     def run_once(self) -> list[str]:
         """
