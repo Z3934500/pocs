@@ -1,6 +1,6 @@
 # CCE Deployment — Infra Layer + Application Layer
 
-The `deploy/` directory is split into two independent layers with separate lifecycles and ownership.
+The `deploy/` directory is split into two independent layers with separate lifecycles.
 
 ```
 deploy/
