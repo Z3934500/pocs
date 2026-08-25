@@ -289,6 +289,12 @@ class _RedisSink:
     SinkFunction: write CceFeatureUpdate to Redis HSET.
     Uses pipeline (batched) writes per checkpoint boundary for throughput.
     Exactly-once is achieved by Flink checkpoint + Redis MULTI/EXEC.
+
+    This sink fails fast: a missing redis-py or an unreachable host raises in
+    open(), and write errors propagate out of invoke() so the checkpoint fails
+    and Flink retries. There is no local fallback here on purpose — the
+    fallback path is `run` mode (run_local_simulation), which targets
+    LocalOnlineStore explicitly instead of degrading a cluster job.
     """
 
     def __init__(self, host: str, port: int) -> None:
@@ -299,24 +305,40 @@ class _RedisSink:
     def open(self, ctx: Any) -> None:
         try:
             import redis  # type: ignore[import]
-            self._client = redis.Redis(
-                host=self._host,
-                port=self._port,
-                decode_responses=True,
-                socket_connect_timeout=3,
-            )
-        except ImportError:
-            logger.warning("redis-py not installed; _RedisSink will no-op")
+        except ImportError as exc:
+            # This sink only runs in `submit` mode on a Flink cluster; the
+            # no-Redis path is run_local_simulation(), which writes to
+            # LocalOnlineStore instead. Warning and no-opping here let a job
+            # consume Kafka, compute every window and discard all output while
+            # reporting RUNNING — total data loss behind a green status.
+            raise RuntimeError(
+                "redis-py is not installed on the Flink task managers, so the feature "
+                "sink cannot write. Install redis>=5.0 in the cluster image, or use "
+                "`run` mode for a local simulation backed by LocalOnlineStore."
+            ) from exc
+
+        client = redis.Redis(
+            host=self._host,
+            port=self._port,
+            decode_responses=True,
+            socket_connect_timeout=3,
+        )
+        # redis-py connects lazily, so without an explicit probe an unreachable
+        # host surfaces as a per-record write error rather than a startup
+        # failure — again leaving the job RUNNING while dropping everything.
+        client.ping()
+        self._client = client
 
     def invoke(self, value: str, ctx: Any) -> None:
         if self._client is None:
-            return
-        try:
-            update = json.loads(value)
-            key = f"cce:features:{update['unified_customer_key']}"
-            self._client.hset(key, mapping={k: str(v) for k, v in update.items()})
-        except Exception as exc:
-            logger.error("RedisSink write error: %s", exc)
+            raise RuntimeError("_RedisSink.invoke called before open()")
+        update = json.loads(value)
+        key = f"cce:features:{update['unified_customer_key']}"
+        # Not caught on purpose: the exactly-once contract in the class docstring
+        # only holds if a failed write fails the checkpoint. Logging and
+        # returning would drop the record while the checkpoint still succeeded,
+        # silently turning exactly-once into at-most-once.
+        self._client.hset(key, mapping={k: str(v) for k, v in update.items()})
 
     def close(self) -> None:
         if self._client:

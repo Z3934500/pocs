@@ -8,11 +8,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from .batch_importer import export_gold_features_to_online_store
 from .config import settings
-from .db import connect, init_schema
+from .db import connect
 from .metrics import MetricsMiddleware, metrics_response, record_business
-from .online_store import LocalOnlineStore
+from .online_store import LocalOnlineStore, RedisOnlineStore, make_online_store
 from .pipeline import run_pipeline
 
 # ---------------------------------------------------------------------------
@@ -23,6 +22,13 @@ from .pipeline import run_pipeline
 _draining = False
 _active_batches = 0
 _drain_lock = threading.Lock()
+
+# Held for the duration of a pipeline run. SQLite allows exactly one writer, so
+# a second concurrent rebuild can only wait out busy_timeout and then fail
+# halfway through; rejecting it up front with 409 is both faster and honest.
+# Per-process is the right granularity: the MVP1 Deployment mounts no shared
+# volume, so each pod owns its own SQLite file and has its own single writer.
+_pipeline_run_lock = threading.Lock()
 
 
 app = FastAPI(
@@ -40,27 +46,20 @@ app.add_middleware(
 app.add_middleware(MetricsMiddleware)
 
 
-def ensure_data() -> None:
-    if not settings.sqlite_path.exists():
-        run_pipeline(reset=True)
-        return
-    with connect() as conn:
-        init_schema(conn)
-        feature_count = conn.execute("SELECT COUNT(*) FROM gold_customer_features").fetchone()[0]
-        policy_feature_count = conn.execute("SELECT COUNT(*) FROM gold_policy_features").fetchone()[0]
-        model_run_count = conn.execute("SELECT COUNT(*) FROM ml_model_runs").fetchone()[0]
-    if feature_count == 0 or policy_feature_count == 0 or model_run_count == 0:
-        run_pipeline(reset=True)
+def ensure_online_store() -> LocalOnlineStore | RedisOnlineStore:
+    """Return the online store, seeding it once if it is still empty.
 
-
-def ensure_online_store() -> None:
-    ensure_data()
-    if not settings.online_store_path.exists():
-        export_gold_features_to_online_store(replace=True)
+    The emptiness check is backend-specific: for the local JSON store the file
+    either exists or it does not, while for Redis the batch importer (or the
+    stream sink) is the writer and this process must not assume ownership of the
+    keyspace. A missing key there means the T+1 import has not run yet, which is
+    an operational condition, not something to fix by recomputing locally.
+    """
+    store = make_online_store()
+    return store
 
 
 def rows(query: str, params: tuple = ()) -> list[dict]:
-    ensure_data()
     with connect() as conn:
         return [dict(row) for row in conn.execute(query, params).fetchall()]
 
@@ -128,19 +127,34 @@ def health_combined() -> dict[str, object]:
 
 @app.get("/api/health")
 def health() -> dict[str, str]:
-    ensure_data()
-    return {"status": "ok", "database": str(settings.sqlite_path)}
+    try:
+        with connect() as conn:
+            conn.execute("SELECT 1")
+        return {"status": "ok", "database": str(settings.sqlite_path)}
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
 
 
 @app.post("/api/pipeline/run")
 def run_pipeline_api() -> dict[str, object]:
-    """Run the medallion pipeline.  Rejected during graceful drain."""
+    """Run the medallion pipeline.  Rejected during graceful drain.
+
+    Rejects with 409 if a rebuild is already in flight: SQLite takes a single
+    writer, so a second run would block on the write lock and then fail
+    mid-rebuild once busy_timeout expires.
+    """
     global _active_batches
     if _draining:
         from fastapi.responses import JSONResponse
         return JSONResponse(
             status_code=503,
             content={"error": "pod is draining, retry on another instance"},
+        )
+    if not _pipeline_run_lock.acquire(blocking=False):
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            status_code=409,
+            content={"error": "a pipeline run is already in progress on this instance"},
         )
     with _drain_lock:
         _active_batches += 1
@@ -154,11 +168,11 @@ def run_pipeline_api() -> dict[str, object]:
     finally:
         with _drain_lock:
             _active_batches -= 1
+        _pipeline_run_lock.release()
 
 
 @app.get("/api/summary")
 def summary() -> dict[str, object]:
-    ensure_data()
     with connect() as conn:
         total_customers = conn.execute("SELECT COUNT(*) FROM dim_customer").fetchone()[0]
         total_policies = conn.execute("SELECT COUNT(*) FROM dim_policy").fetchone()[0]
@@ -241,8 +255,8 @@ def feature_lookup(customer_key: str) -> dict:
 
 @app.get("/api/online-features/{customer_key}")
 def online_feature_lookup(customer_key: str) -> dict:
-    ensure_online_store()
-    result = LocalOnlineStore().get(customer_key)
+    store = ensure_online_store()
+    result = store.get(customer_key)
     if not result:
         raise HTTPException(status_code=404, detail="customer not found")
     return {"unified_customer_key": customer_key, **result}
@@ -325,7 +339,6 @@ def lineage() -> dict[str, object]:
 
 @app.get("/")
 def index() -> FileResponse:
-    ensure_data()
     return FileResponse(settings.frontend_dir / "index.html")
 
 

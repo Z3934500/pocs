@@ -10,7 +10,7 @@ from pathlib import Path
 from uuid import uuid5, NAMESPACE_URL
 
 from .config import settings
-from .db import connect, init_schema, reset_tables
+from .db import connect, init_schema, reset_tables, writing_transaction
 from .graph_identity import find_identity_candidates
 from .mlops import calculate_feature_drift, score_customer_features
 from .segmentation import FeaturePoint, assign_segments
@@ -350,7 +350,6 @@ def build_bronze(conn) -> None:
         """,
         event_rows,
     )
-    conn.commit()
 
 
 def build_silver(conn) -> None:
@@ -507,8 +506,6 @@ def build_silver(conn) -> None:
             ),
         )
 
-    conn.commit()
-
 
 def build_gold(conn) -> None:
     tx_rows = conn.execute(
@@ -662,7 +659,6 @@ def build_gold(conn) -> None:
         settings.gold_dir / "policy_features.csv",
         [dict(row) for row in conn.execute("SELECT * FROM gold_policy_features").fetchall()],
     )
-    conn.commit()
 
 
 def build_mlops(conn) -> None:
@@ -740,21 +736,37 @@ def build_mlops(conn) -> None:
                 now,
             ),
         )
-    conn.commit()
 
 
 def run_pipeline(reset: bool = True) -> dict[str, int]:
+    """Rebuild every layer, publishing the result as one atomic commit.
+
+    The truncate and the repopulate must land together: committing per layer
+    would publish "Gold is empty" for the duration of the rebuild, and
+    api.ensure_data() reads an empty Gold as "needs rebuild" and launches a
+    competing writer. So the four builders and reset_tables all run inside one
+    writing_transaction and none of them commit on their own.
+
+    init_schema stays outside it — DDL commits internally, and it is shared with
+    callers that are not in a transaction.
+
+    Caveat: the Bronze JSONL and Gold CSV exports are plain file writes, so they
+    are not covered by the rollback. On failure the database is left untouched
+    but those files may hold partial output; the next successful run overwrites
+    them.
+    """
     for path in [settings.bronze_dir, settings.silver_dir, settings.gold_dir, settings.sqlite_path.parent]:
         path.mkdir(parents=True, exist_ok=True)
 
     with connect() as conn:
         init_schema(conn)
-        if reset:
-            reset_tables(conn)
-        build_bronze(conn)
-        build_silver(conn)
-        build_gold(conn)
-        build_mlops(conn)
+        with writing_transaction(conn):
+            if reset:
+                reset_tables(conn)
+            build_bronze(conn)
+            build_silver(conn)
+            build_gold(conn)
+            build_mlops(conn)
         counts = {
             "bronze_events": conn.execute("SELECT COUNT(*) FROM bronze_events").fetchone()[0],
             "customers": conn.execute("SELECT COUNT(*) FROM dim_customer").fetchone()[0],
