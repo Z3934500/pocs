@@ -4,6 +4,9 @@
 03_business_insights/
 DELIVERY_PLAN.md
 
+# Claude AI session files
+.claude/
+
 # Python
 __pycache__/
 *.pyc
