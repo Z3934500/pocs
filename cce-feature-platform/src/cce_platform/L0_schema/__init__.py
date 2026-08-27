@@ -18,6 +18,21 @@ The analytics/operational split is the important boundary here:
 
 `ANALYTICS_TABLES` and `OPERATIONAL_TABLES` are asserted disjoint at import
 time, so a table cannot silently end up in both sets.
+
+Module naming clarification
+----------------------------
+`mlops.py` and `quality.py` are SCHEMA modules (DDL), not runtime contracts:
+  - mlops.py   : CREATE TABLE gold_customer_model_scores, ml_model_runs, ml_feature_drift
+  - quality.py : CREATE TABLE dq_issues
+
+They define TABLE STRUCTURE, not validation logic. The validation itself lives
+in L2_olap/pipeline.py (build_quality_layer) and L2_olap/mlops.py (scoring).
+
+If these modules contained runtime checks (e.g., "assert score in [0,1]"), they
+would belong in a separate `L0_contracts/` package. But they don't — they're
+pure DDL, so they correctly live here.
+
+Think of this package as "what tables exist," not "how to validate their data."
 """
 
 from __future__ import annotations

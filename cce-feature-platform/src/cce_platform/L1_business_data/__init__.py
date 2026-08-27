@@ -23,6 +23,29 @@ so an absent file leaves the PoC working while a deployment can mount a
 ConfigMap. A malformed file is logged and ignored rather than raised: every
 caller is on a serving path, and failing to start over a bad campaign edit is
 worse than serving the previous known-good numbers.
+
+LATERAL COUPLING FORBIDDEN
+---------------------------
+`L1_business_data` and `L1_mechanism` are SIBLINGS at layer 1. Neither may
+import the other. Both reach DOWN into L0 only.
+
+This is enforced by `tests/test_layers.py::test_layer_1_reaches_only_layer_0`.
+
+Why no lateral coupling:
+  - Business data (thresholds, priorities) should not depend on I/O mechanisms
+  - Mechanism (db, kv) should not depend on business domain concepts
+  - Separation enables reuse: mechanism is shared by OLAP/OLTP, business_data
+    is specific to CCE financial products
+
+If business_data needs I/O, the caller (L2) bridges:
+  ✓ thresholds = load_policy(); db.store(thresholds)  # L2 orchestrates
+  ✗ policy.save_to_database()                         # would couple to mechanism
+
+If mechanism needs business rules, the caller (L2) passes them:
+  ✓ reset_tables(ANALYTICS_TABLES)  # caller decides which tables are "analytics"
+  ✗ reset_analytics_tables()         # mechanism shouldn't know "analytics" concept
+
+See also: docs/ADR/ADR-001-olap-oltp-siblings.md (similar sibling pattern at L2)
 """
 
 from __future__ import annotations

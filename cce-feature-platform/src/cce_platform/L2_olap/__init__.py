@@ -24,6 +24,31 @@ anything.
   graph_identity.py       identity candidate discovery
   metrics.py              Prometheus surface
 
+Module Responsibilities
+-----------------------
+Despite being in one package, these modules serve different concerns:
+
+**Data pipeline core:**
+  - pipeline.py       : batch medallion transform (Bronze→Silver→Gold)
+  - realtime.py       : CDC event consumer, updates online store
+  - batch_importer.py : exports Gold to online store for serving
+
+**Infrastructure adapters:**
+  - flink_cdc_pipeline.py : streaming job submission (optional PyFlink)
+  - online_store.py       : feature serving backend (Redis or JSON)
+  - metrics.py            : Prometheus exposition
+
+**Domain logic:**
+  - cart_zset.py       : shopping cart with expiry/priority (see ADR-002)
+  - segmentation.py    : customer clustering algorithm
+  - graph_identity.py  : identity candidate matching
+  - mlops.py           : propensity scoring + drift detection
+
+**API surface:**
+  - api.py : FastAPI endpoints exposing features, identity, MLOps
+
+This diversity is why we have **no re-exports** (see next section).
+
 Deliberately no re-exports
 --------------------------
 This module is a docstring and nothing else. Re-exporting the submodules the way
