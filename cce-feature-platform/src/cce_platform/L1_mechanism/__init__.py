@@ -21,6 +21,29 @@ layer without violating the boundary: `L2_oltp` may import from here, and this
 layer imports nothing back. `L2_oltp/ports.py` goes one step further and declares
 the interface it needs, so the transaction state machine depends on six named
 operations rather than on `kv_backend.LocalZSetStore`, which is a PoC artifact.
+
+LATERAL COUPLING FORBIDDEN
+---------------------------
+`L1_mechanism` and `L1_business_data` are SIBLINGS at layer 1. Neither may
+import the other. Both reach DOWN into L0 only.
+
+This is enforced by `tests/test_layers.py::test_layer_1_reaches_only_layer_0`.
+
+Why no lateral coupling:
+  - Prevents circular dependencies at the same layer
+  - Keeps mechanism reusable across different business domains
+  - Allows independent evolution (changing policy.py doesn't affect db.py)
+  - Forces shared concerns to move DOWN to L0 where they belong
+
+If `L1_mechanism` needs business data, the caller (L2) passes it as a parameter:
+  ✓ def truncate_tables(tables: list[str])  # caller gets list from business_data
+  ✗ def truncate_business_tables()          # would need to import business_data
+
+If `L1_business_data` needs I/O, the caller (L2) handles it:
+  ✓ policy.load() returns dict; caller stores it via db.connect()
+  ✗ policy.save_to_db()  # would need to import mechanism
+
+See also: docs/ADR/ADR-001-olap-oltp-siblings.md (similar sibling pattern at L2)
 """
 
 from __future__ import annotations
