@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import threading
 from pathlib import Path
 from typing import Any
 
-from .config import settings
+from ..L0_configuration import settings
+from ..L1_mechanism import make_kv_backend
 
 logger = logging.getLogger(__name__)
 
@@ -153,29 +153,15 @@ def make_online_store(
 ) -> LocalOnlineStore | RedisOnlineStore:
     """Pick the online store backend: Redis when a URL is available, else local JSON.
 
-    Mirrors the guard in cart_zset / redis_state_machine — where the deployed
-    environment requires Redis, an unreachable endpoint fails fast instead of
-    silently writing to a per-process file that no other pod can read.
+    Shares `kv_backend.make_kv_backend` with cart_zset and oltp.state_machine —
+    where the deployed environment requires Redis, an unreachable endpoint fails
+    fast instead of silently writing to a per-process file that no other pod can
+    read.
     """
-    url = redis_url or os.getenv("REDIS_URL")
-    if url:
-        try:
-            store = RedisOnlineStore(url)
-            logger.info("online store: Redis backend at %s", url)
-            return store
-        except Exception as exc:
-            if settings.require_redis:
-                raise RuntimeError(
-                    f"online store: Redis at {url} is unreachable ({exc}) and "
-                    f"CCE_RUNTIME_ENV={settings.runtime_env} requires it. "
-                    "Set CCE_REQUIRE_REDIS=false to allow the local-file fallback."
-                ) from exc
-            logger.warning("online store: Redis unavailable (%s), using local JSON store", exc)
-            return LocalOnlineStore(store_path)
-    if settings.require_redis:
-        raise RuntimeError(
-            f"online store: REDIS_URL is not set but CCE_RUNTIME_ENV="
-            f"{settings.runtime_env} requires Redis. "
-            "Set CCE_REQUIRE_REDIS=false to allow the local-file fallback."
-        )
-    return LocalOnlineStore(store_path)
+    store, _mode = make_kv_backend(
+        "online store",
+        local_factory=lambda: LocalOnlineStore(store_path),
+        redis_factory=RedisOnlineStore,
+        redis_url=redis_url,
+    )
+    return store

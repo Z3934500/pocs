@@ -8,8 +8,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from .config import settings
-from .db import connect
+from ..L0_configuration import settings
+from ..L1_mechanism import connect
 from .metrics import MetricsMiddleware, metrics_response, record_business
 from .online_store import LocalOnlineStore, RedisOnlineStore, make_online_store
 from .pipeline import run_pipeline
@@ -159,7 +159,7 @@ def run_pipeline_api() -> dict[str, object]:
     with _drain_lock:
         _active_batches += 1
     try:
-        counts = run_pipeline(reset=True)
+        counts = run_pipeline()
         record_business("pipeline_run", "success")
         return {"status": "completed", "counts": counts}
     except Exception:

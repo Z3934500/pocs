@@ -7,8 +7,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
-from .config import settings
-from .db import connect
+from ..L0_configuration import settings
+from ..L1_mechanism import connect
 
 
 SERVICE = "cce-feature-platform"

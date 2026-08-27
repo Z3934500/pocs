@@ -7,11 +7,11 @@ import json
 from collections import defaultdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from uuid import uuid5, NAMESPACE_URL
 
-from .config import settings
-from .db import connect, init_schema, reset_tables, writing_transaction
+from ..L0_configuration import settings
+from ..L1_mechanism import connect, init_schema, reset_tables, writing_transaction
 from .graph_identity import find_identity_candidates
+from ..L0_primitives import stable_issue_id
 from .mlops import calculate_feature_drift, score_customer_features
 from .segmentation import FeaturePoint, assign_segments
 
@@ -35,11 +35,6 @@ def normalize_identifier(id_type: str, id_value: str) -> tuple[str, str]:
 
 def resolve_unified_key(id_type: str, id_value: str) -> str | None:
     return IDENTITY_BRIDGE.get(normalize_identifier(id_type, id_value))
-
-
-def stable_issue_id(*parts: str) -> str:
-    value = "|".join(parts)
-    return str(uuid5(NAMESPACE_URL, value))
 
 
 def utc_now() -> str:
@@ -738,7 +733,7 @@ def build_mlops(conn) -> None:
         )
 
 
-def run_pipeline(reset: bool = True) -> dict[str, int]:
+def run_pipeline() -> dict[str, int]:
     """Rebuild every layer, publishing the result as one atomic commit.
 
     The truncate and the repopulate must land together: committing per layer
@@ -746,6 +741,15 @@ def run_pipeline(reset: bool = True) -> dict[str, int]:
     api.ensure_data() reads an empty Gold as "needs rebuild" and launches a
     competing writer. So the four builders and reset_tables all run inside one
     writing_transaction and none of them commit on their own.
+
+    The truncation is unconditional. This used to take a `reset` flag, but no
+    caller ever passed False, and passing it kept rows that no builder
+    reproduces: an upstream record deleted between two runs survived as current
+    data. That contradicts C6 in docs/ARCHITECTURE_OLTP_BOUNDARY.md — "Gold is
+    truncated and rebuilt on every pipeline run" — which is the stated reason
+    the analytics tables are separable from `outbox_events` and
+    `settlement_schedule` at all. A flag that silently breaks the invariant the
+    layout depends on is worse than no flag.
 
     init_schema stays outside it — DDL commits internally, and it is shared with
     callers that are not in a transaction.
@@ -761,8 +765,7 @@ def run_pipeline(reset: bool = True) -> dict[str, int]:
     with connect() as conn:
         init_schema(conn)
         with writing_transaction(conn):
-            if reset:
-                reset_tables(conn)
+            reset_tables(conn)
             build_bronze(conn)
             build_silver(conn)
             build_gold(conn)
@@ -784,9 +787,14 @@ def run_pipeline(reset: bool = True) -> dict[str, int]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the CCE medallion pipeline.")
-    parser.add_argument("command", choices=["run", "reset"], nargs="?", default="run")
+    # Only `run`. There is no second mode: the rebuild always truncates (C6 in
+    # docs/ARCHITECTURE_OLTP_BOUNDARY.md), so a `reset` choice could only ever be
+    # an alias that implied otherwise. argparse rejects anything else, which is
+    # the honest outcome — an accepted no-op tells the caller it selected
+    # behaviour it did not get.
+    parser.add_argument("command", choices=["run"], nargs="?", default="run")
     args = parser.parse_args()
-    counts = run_pipeline(reset=True)
+    counts = run_pipeline()
     print(json.dumps({"command": args.command, "counts": counts}, indent=2, sort_keys=True))
 
 

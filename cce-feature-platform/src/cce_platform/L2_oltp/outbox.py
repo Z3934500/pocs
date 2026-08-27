@@ -21,23 +21,30 @@ Solution:
   - 写入 settlement_schedule 表时计算 settle_ts（考虑Holiday Calendar）。
   - SettlementTrigger 轮询 WHERE settle_ts <= now AND status='PENDING_SETTLE'，
     触发状态机 advance(SETTLEMENT_IN_PROGRESS)。
-  - 结合 redis_state_machine 的乐观锁，防止重复触发（文档追问二场景）。
+  - 结合 oltp.state_machine 的乐观锁，防止重复触发（文档追问二场景）。
 
 Holiday Calendar:
   本地PoC用硬编码的SG/HK节假日列表。
   生产环境从Consul KV读取，支持临时休市（台风/国殇日）零代码更新。
 
 Usage:
-  from cce_platform.outbox_publisher import (
+  from cce_platform.L2_oltp import (
       write_outbox_event, EventPublisher,
       schedule_settlement, SettlementTrigger,
-      HolidayCalendar,
-  )# 业务代码里（同一事务）:
-  with connect() as conn:
-      conn.execute("UPDATE orders SET status='PAID' ...")
-      write_outbox_event(conn, aggregate_type="order", aggregate_id="O-1001",
-                         event_type="OrderPaid", payload={"amount": 288.0})
-      conn.commit()
+      HolidayCalendar, transaction,
+  )
+
+  # 业务代码里（同一事务）:
+  # transaction() 打开操作型数据库并保证 commit/rollback/close，
+  # settlement_schedule 与 outbox_events 同在一个文件，故可共享一次提交。
+  with transaction() as conn:
+      schedule_settlement(conn, "TXN-001", "U0005", "INVESTMENT", 2100.0)
+      write_outbox_event(conn, aggregate_type="settlement", aggregate_id="TXN-001",
+                         event_type="SettlementScheduled", payload={"amount": 2100.0})
+
+  # 注意：事务状态本身在 Redis，不在此库，
+  # 所以 sm.advance() 与上面的写入无法共享事务 —
+  # 参见 docs/ARCHITECTURE_OLTP_BOUNDARY.md 的一致性边界一节。
 
   # 后台服务:
   publisher = EventPublisher()
@@ -55,11 +62,15 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, UTC
 from pathlib import Path
 from typing import Any, Callable
-from uuid import uuid4
 
-from .config import settings
-from .db import connect, init_schema
-from .pipeline import stable_issue_id
+from ..L0_configuration import settings
+from ..L0_primitives import stable_issue_id
+# PRODUCT_T_PLUS is re-exported (`as` form) for callers that read the whole
+# table, e.g. chaos_testing/validate_chaos.py. settlement_t_plus() is the
+# accessor this module itself uses.
+from ..L1_business_data import PRODUCT_T_PLUS as PRODUCT_T_PLUS
+from ..L1_business_data import settlement_t_plus
+from .store import init_schema, session
 
 logger = logging.getLogger(__name__)
 
@@ -128,16 +139,8 @@ class HolidayCalendar:
         return dt.timestamp() - sgt_offset
 
 
-# T+N rules per product (mirrors CCE COMPLIANCE_HOLD_THRESHOLD pattern)
-PRODUCT_T_PLUS: dict[str, int] = {
-    "PREMIUM_FINANCING": 2,
-    "INVESTMENT":        2,
-    "INVESTMENT_LINKED": 2,
-    "INSURANCE":         1,
-    "TRAVEL_INSURANCE":  0,
-    "SAVINGS":           0,
-    "CARD":              0,
-}
+# Settlement cycles are market-defined business policy, loaded from config
+# rather than hardcoded here — see policy.py and settlement_t_plus().
 
 
 # ---------------------------------------------------------------------------
@@ -150,15 +153,29 @@ def write_outbox_event(
     aggregate_id: str,
     event_type: str,
     payload: dict[str, Any],
+    dedup_key: str | None = None,
 ) -> str:
     """
     Write an event to the outbox table within the caller's transaction.MUST be called before conn.commit() so the business update and the
     outbox write are atomically committed together.
 
     Returns the generated event_id for traceability.
+
+    `dedup_key` makes a producer-side retry idempotent. `event_id` is the table's
+    PRIMARY KEY and the insert below is `INSERT OR IGNORE`, so the guard already
+    exists at the storage layer — what it needs is an id a retry can reproduce.
+    Pass a key derived from the business fact (`f"{order_id}:OrderPaid"`) and the
+    second write of the same fact collides and is ignored.
+
+    Omitting it keeps the previous behaviour: the clock is mixed in, so every
+    call mints a distinct id. That is the correct default rather than hashing the
+    payload, because two legitimately identical business events — the same
+    customer buying the same product for the same amount twice — must both
+    survive. Only the caller knows which of the two situations it is in, so the
+    decision stays with the caller instead of being guessed here.
     """
-    event_id = stable_issue_id("outbox", aggregate_type, aggregate_id, event_type,
-                               str(time.time()))
+    seed = dedup_key if dedup_key is not None else str(time.time())
+    event_id = stable_issue_id("outbox", aggregate_type, aggregate_id, event_type, seed)
     now = datetime.now(UTC).isoformat(timespec="seconds")
     conn.execute(
         """
@@ -198,7 +215,7 @@ def schedule_settlement(
     """
     cal = calendar or _calendar
     td = trade_date or date.today()
-    t_plus = PRODUCT_T_PLUS.get(product.upper(), 2)
+    t_plus = settlement_t_plus(product)
     sd = cal.settle_date(td, t_plus)
     sts = cal.settle_ts(td, t_plus)
     now = datetime.now(UTC).isoformat(timespec="seconds")
@@ -264,6 +281,20 @@ class EventPublisher:
         self._downstream = downstream or self._default_downstream
         self._db_path = db_path
         self._stop_event = threading.Event()
+        self._schema_ready = False
+
+    def _ensure_schema(self, conn) -> None:
+        """Create the operational tables once per instance, not once per poll.
+
+        `executescript()` issues an implicit COMMIT before running, so calling
+        it on every poll committed whatever transaction happened to be open and
+        re-ran the DDL for the lifetime of the loop. The statements are
+        IF NOT EXISTS so re-running was harmless, but the implicit commit was
+        not.
+        """
+        if not self._schema_ready:
+            init_schema(conn)
+            self._schema_ready = True
 
     @staticmethod
     def _default_downstream(event: dict[str, Any]) -> bool:
@@ -286,8 +317,8 @@ class EventPublisher:
         Returns list of PublishResult for observability / testing.
         """
         results: list[PublishResult] = []
-        with connect(self._db_path) as conn:
-            init_schema(conn)
+        with session(self._db_path) as conn:
+            self._ensure_schema(conn)
             rows = conn.execute(
                 """
                 SELECT event_id, aggregate_type, aggregate_id, event_type,
@@ -411,6 +442,14 @@ class SettlementTrigger:
         self._sm = state_machine
         self._db_path = db_path
         self._stop_event = threading.Event()
+        self._schema_ready = False
+
+    def _ensure_schema(self, conn) -> None:
+        """Create the operational tables once per instance — see
+        EventPublisher._ensure_schema for why this is not per-poll."""
+        if not self._schema_ready:
+            init_schema(conn)
+            self._schema_ready = True
 
     def _get_state_machine(self):
         # Cached after first construction. TransactionStateMachine() builds a
@@ -420,7 +459,7 @@ class SettlementTrigger:
         # lifetime of the loop. Constructing it per call also moves a Redis
         # outage from "fails once at startup" to "raises on every poll".
         if self._sm is None:
-            from .redis_state_machine import TransactionStateMachine
+            from .state_machine import TransactionStateMachine
             self._sm = TransactionStateMachine()
         return self._sm
 
@@ -431,8 +470,8 @@ class SettlementTrigger:
         now_ts = time.time()
         triggered: list[str] = []
 
-        with connect(self._db_path) as conn:
-            init_schema(conn)
+        with session(self._db_path) as conn:
+            self._ensure_schema(conn)
             rows = conn.execute(
                 """
                 SELECT txn_id, unified_customer_key, product, amount, settle_date
@@ -448,7 +487,7 @@ class SettlementTrigger:
             for row in rows:
                 txn_id = row["txn_id"]
                 try:
-                    from .redis_state_machine import TxnState, TransactionNotFoundError, InvalidTransitionError
+                    from .state_machine import TxnState, TransactionNotFoundError, InvalidTransitionError
                     try:
                         sm.advance(
                             txn_id,
@@ -503,10 +542,10 @@ class SettlementTrigger:
         Called by the settlement worker after fund transfer confirmation.
         """
         try:
-            from .redis_state_machine import TxnState
+            from .state_machine import TxnState
             sm = self._get_state_machine()
             sm.advance(txn_id, TxnState.SETTLED, actor="settlement_worker", reason="funds_transferred")
-            with connect(self._db_path) as conn:
+            with session(self._db_path) as conn:
                 now = datetime.now(UTC).isoformat(timespec="seconds")
                 conn.execute(
                     "UPDATE settlement_schedule SET status='SETTLED', settled_at=? WHERE txn_id=?",
