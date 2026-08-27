@@ -61,7 +61,7 @@ cce-feature-platform/
 | `4_anomaly_detection.py` | Detect transaction outliers, customer feature anomalies and feature drift | Delta Gold monitoring and anomaly tables |
 | `cce_feature_pipeline_dag.py` | Orchestrate the jobs with retries, SLA and dependency order | Airflow / MWAA pipeline |
 
-This should not replace `src/cce_platform/pipeline.py`. The local pipeline remains the runnable reference; the Spark scripts show the production-scale execution model.
+This should not replace `src/cce_platform/L2_olap/pipeline.py`. The local pipeline remains the runnable reference; the Spark scripts show the production-scale execution model.
 
 ## Warehouse Layer Mapping
 

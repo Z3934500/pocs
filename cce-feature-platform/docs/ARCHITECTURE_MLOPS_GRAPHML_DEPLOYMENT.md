@@ -89,10 +89,10 @@ customer_policy:{unified_customer_key}:{policy_id}:features
 
 | Path | Purpose |
 | --- | --- |
-| `src/cce_platform/pipeline.py` | Local Bronze/Silver/Gold pipeline, policy features, model scores and drift outputs. |
-| `src/cce_platform/graph_identity.py` | Graph-style identity candidate scoring for same-person matching. |
-| `src/cce_platform/mlops.py` | Lightweight propensity scoring and feature drift calculations. |
-| `src/cce_platform/api.py` | Feature API, identity candidate API and MLOps drift/model-run API. |
+| `src/cce_platform/L2_olap/pipeline.py` | Local Bronze/Silver/Gold pipeline, policy features, model scores and drift outputs. |
+| `src/cce_platform/L2_olap/graph_identity.py` | Graph-style identity candidate scoring for same-person matching. |
+| `src/cce_platform/L2_olap/mlops.py` | Lightweight propensity scoring and feature drift calculations. |
+| `src/cce_platform/L2_olap/api.py` | Feature API, identity candidate API and MLOps drift/model-run API. |
 | `deploy/databricks/cce_medallion_job.py` | Spark/Delta/MLflow version of the same architecture. |
 | `deploy/k8s/*.yaml` | EKS API, HPA, stream job, Gold-to-Redis importer and MLOps monitor. |
 
@@ -110,9 +110,9 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
 python -m pip install -e .
-python -m cce_platform.pipeline run
-python -m cce_platform.batch_importer --replace
-python -m uvicorn cce_platform.api:app --host 127.0.0.1 --port 8010
+python -m cce_platform.L2_olap.pipeline run
+python -m cce_platform.L2_olap.batch_importer --replace
+python -m uvicorn cce_platform.L2_olap.api:app --host 127.0.0.1 --port 8010
 ```
 
 Useful endpoints:

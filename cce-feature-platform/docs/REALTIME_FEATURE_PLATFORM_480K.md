@@ -95,10 +95,10 @@ For cost drivers, operational maturity and rollout constraints, see `OPERATIONS_
 
 | Path | Purpose |
 | --- | --- |
-| `src/cce_platform/pipeline.py` | Local Bronze -> Silver -> Gold Medallion pipeline. |
-| `src/cce_platform/realtime.py` | Local CDC event simulation and real-time feature update. |
-| `src/cce_platform/batch_importer.py` | Gold-to-online-store batch importer. |
-| `src/cce_platform/online_store.py` | JSON-backed local replacement for Redis. |
+| `src/cce_platform/L2_olap/pipeline.py` | Local Bronze -> Silver -> Gold Medallion pipeline. |
+| `src/cce_platform/L2_olap/realtime.py` | Local CDC event simulation and real-time feature update. |
+| `src/cce_platform/L2_olap/batch_importer.py` | Gold-to-online-store batch importer. |
+| `src/cce_platform/L2_olap/online_store.py` | JSON-backed local replacement for Redis. |
 | `deploy/databricks/cce_medallion_job.py` | Spark/Delta version of batch feature engineering. |
 | `deploy/k8s/deployment.yaml` | Feature API deployment. |
 | `deploy/k8s/hpa.yaml` | API autoscaling, 2-5 pods. |
@@ -122,25 +122,25 @@ $env:PYTHONPATH="src"
 Build the T+1 batch features:
 
 ```powershell
-python -m cce_platform.pipeline run
+python -m cce_platform.L2_olap.pipeline run
 ```
 
 Load Gold features into the local online store:
 
 ```powershell
-python -m cce_platform.batch_importer --replace
+python -m cce_platform.L2_olap.batch_importer --replace
 ```
 
 Seed and process CDC-style events:
 
 ```powershell
-python -m cce_platform.realtime run
+python -m cce_platform.L2_olap.realtime run
 ```
 
 Serve the Feature API:
 
 ```powershell
-python -m uvicorn cce_platform.api:app --host 127.0.0.1 --port 8010
+python -m uvicorn cce_platform.L2_olap.api:app --host 127.0.0.1 --port 8010
 ```
 
 Useful APIs:

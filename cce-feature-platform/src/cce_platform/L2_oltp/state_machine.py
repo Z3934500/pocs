@@ -4,7 +4,13 @@ Redis ZSET-backed transaction state machine for CCE financial transactions.
 Design:
   - Each transaction has a state history stored in a ZSET:key:   txn:state:{txn_id}
       score: Unix timestamp (microseconds for sub-second ordering)
-      member: {state}:{event_id}   (event_id ensures uniqueness within same second)
+      member: one JSON object holding state, event_id, actor, reason, metadata
+              (event_id ensures uniqueness within the same second)
+
+    The member encoding lives in `audit.py`, not here: what an audit entry says
+    is a separate decision from how transitions are guarded, and attribution has
+    to be part of the same ZADD as the transition it describes. Legacy
+    `{state}:{event_id}` members still decode, flagged `attributed=False`.
 
   - Current state is ZREVRANGE key 0 0 (highest score = latest)
   - Full audit trail is ZRANGE key 0 -1 WITHSCORES
@@ -23,13 +29,16 @@ Replica constraint:
   production fail fast instead of degrading (see config.py).
 
 State machine (matches CCE product types):
-  PENDING → RISK_CHECK → APPROVED  → SETTLED       ↘ COMPLIANCE_HOLD → APPROVED → SETTLED
-                       ↘ REJECTEDAny state → COMPENSATING → COMPENSATED   (saga rollback path)
+  PENDING → RISK_CHECK → APPROVED → SETTLED
+                       ↘ COMPLIANCE_HOLD → APPROVED → SETTLED
+                       ↘ REJECTED
+
+  Any state → COMPENSATING → COMPENSATED   (saga rollback path)
 
 Usage:
-  from cce_platform.redis_state_machine import TransactionStateMachine, TxnState
+  from cce_platform.L2_oltp import TransactionStateMachine, TxnState
 
-  sm = TransactionStateMachine()# uses env REDIS_URL or falls back to local
+  sm = TransactionStateMachine()  # uses env REDIS_URL or falls back to local
   sm.init_transaction("TXN-001", amount=1700.0, product="PREMIUM_FINANCING")
   sm.advance("TXN-001", TxnState.RISK_CHECK, actor="risk_engine")
   sm.advance("TXN-001", TxnState.APPROVED,   actor="auto_approve")
@@ -41,15 +50,19 @@ Usage:
 
 from __future__ import annotations
 
-import json
 import logging
-import os
 import time
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
+
+from ..L1_mechanism import LocalZSetStore, REDIS_MODE, make_kv_backend
+from .adapters import LocalZSetAdapter, RedisZSetAdapter
+from .audit import decode_member, encode_member
+from .ports import ZSetStore
+from .risk import RiskDecision, RiskEvaluator, ThresholdRiskEvaluator
 
 logger = logging.getLogger(__name__)
 
@@ -88,13 +101,10 @@ ALLOWED_TRANSITIONS: dict[TxnState, set[TxnState]] = {
     TxnState.COMPENSATED:            set(),                     # terminal
 }
 
-# High-value thresholds for CCE products (SGD)
-COMPLIANCE_HOLD_THRESHOLD: dict[str, float] = {
-    "PREMIUM_FINANCING": 1000.0,
-    "INVESTMENT":        500.0,
-    "INVESTMENT_LINKED": 500.0,
-    "INSURANCE":         2000.0,
-}
+# High-value thresholds are business policy, loaded from config rather than
+# hardcoded here — see policy.py. This module reaches them through the injected
+# RiskEvaluator (L2_oltp/risk.py) rather than importing the accessor directly, so
+# the RISK_CHECK gate has one substitution point.
 
 
 # ---------------------------------------------------------------------------
@@ -111,6 +121,9 @@ class StateTransition:
     reason:     str
     timestamp:  float             # Unix epoch seconds (float for microsecond precision)
     metadata:   dict[str, Any]
+    # False when read back from a member written before attribution was stored:
+    # actor/reason are unknown for that entry, not empty. See L2_oltp/audit.py.
+    attributed: bool = True
 
 
 @dataclass
@@ -140,104 +153,14 @@ class ConcurrentModificationError(Exception):
 
 
 # ---------------------------------------------------------------------------
-# Backend: local fallback (mirrors LocalOnlineStore pattern)
-# ---------------------------------------------------------------------------
-
-class _LocalStateStore:
-    """
-    File-backed fallback used in PoC / unit-test mode when Redis is absent.
-    Persists state as JSON.  Not safe for concurrent multi-process writes,
-    but sufficient for single-process local development.
-    """
-
-    def __init__(self, path: Path) -> None:
-        self._path = path
-
-    def _load(self) -> dict[str, Any]:
-        if not self._path.exists():
-            return {}
-        with self._path.open("r", encoding="utf-8") as fh:
-            return json.load(fh)
-
-    def _save(self, data: dict[str, Any]) -> None:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self._path.with_suffix(f"{self._path.suffix}.tmp")
-        with tmp.open("w", encoding="utf-8") as fh:
-            json.dump(data, fh, indent=2, sort_keys=True)
-        tmp.replace(self._path)
-
-    # -- ZSET semantics emulated with sorted list of (score, member) tuples --
-
-    def zadd(self, key: str, score: float, member: str) -> None:
-        data = self._load()
-        zset: list[list] = data.get(key, [])
-        # remove existing entry with same member (ZADD NX-like upsert)
-        zset = [entry for entry in zset if entry[1] != member]
-        zset.append([score, member])
-        zset.sort(key=lambda e: e[0])
-        data[key] = zset
-        self._save(data)
-
-    def zrevrange_top1(self, key: str) -> str | None:
-        data = self._load()
-        zset = data.get(key, [])
-        if not zset:
-            return None
-        return zset[-1][1]   # highest score = last after sort
-
-    def zrange_all(self, key: str) -> list[tuple[str, float]]:
-        data = self._load()
-        zset = data.get(key, [])
-        return [(entry[1], entry[0]) for entry in zset]
-
-    def exists(self, key: str) -> bool:
-        data = self._load()
-        return key in data and len(data[key]) > 0
-
-    def hset(self, key: str, mapping: dict[str, str]) -> None:
-        data = self._load()
-        data[key] = {**data.get(key, {}), **mapping}
-        self._save(data)
-
-    def hgetall(self, key: str) -> dict[str, str]:
-        data = self._load()
-        return data.get(key, {})
-
-    def close(self) -> None:
-        pass   # nothing to close
-
-
-# ---------------------------------------------------------------------------
-# Backend: Redis (production)
-# ---------------------------------------------------------------------------
-
-def _make_redis_client(redis_url: str):
-    """
-    Returns a redis.Redis client, or raises ImportError if redis-py is not installed.
-    Kept as a function so the module imports cleanly without redis installed.
-    """
-    try:
-        import redis  # type: ignore[import]
-    except ImportError as exc:
-        raise ImportError(
-            "redis-py is required for Redis backend. "
-            "Install with: pip install redis>=5.0"
-        ) from exc
-
-    client = redis.Redis.from_url(
-        redis_url,
-        decode_responses=True,
-        socket_connect_timeout=3,
-        socket_timeout=3,
-        retry_on_timeout=True,
-    )
-    client.ping()   # fail fast on bad URL
-    return client
-
-
-# ---------------------------------------------------------------------------
 # Main state machine class
 # ---------------------------------------------------------------------------
+#
+# This class depends on `ports.ZSetStore`, not on a concrete backend. The two
+# adapters in `adapters.py` map redis-py and `kv_backend.LocalZSetStore` onto
+# that port; a fake satisfying the same Protocol substitutes for either in a
+# test. Members are compared whole, which is LocalZSetStore's default member
+# identity.
 
 class TransactionStateMachine:
     """ZSET-backed financial transaction state machine.
@@ -260,44 +183,42 @@ class TransactionStateMachine:
         self,
         redis_url: str | None = None,
         local_store_path: Path | None = None,
+        risk_evaluator: RiskEvaluator | None = None,
+        store: ZSetStore | None = None,
     ) -> None:
-        from .config import settings
-
-        url = redis_url or os.getenv("REDIS_URL")
-        if url:
-            try:
-                self._backend = _make_redis_client(url)
-                self._mode = "redis"
-                logger.info("TransactionStateMachine: using Redis backend at %s", url)
-            except Exception as exc:
-                if settings.require_redis:
-                    # The local backend is per-process, so degrading here would
-                    # let each replica keep its own divergent transaction state.
-                    raise RuntimeError(
-                        f"TransactionStateMachine: Redis at {url} is unreachable ({exc}) and "
-                        f"CCE_RUNTIME_ENV={settings.runtime_env} requires it. "
-                        "Set CCE_REQUIRE_REDIS=false to allow the local-file fallback."
-                    ) from exc
-                logger.warning(
-                    "TransactionStateMachine: Redis unavailable (%s), falling back to local store", exc
-                )
-                self._backend = self._make_local(local_store_path)
-                self._mode = "local"
-        elif settings.require_redis:
-            raise RuntimeError(
-                f"TransactionStateMachine: REDIS_URL is not set but CCE_RUNTIME_ENV="
-                f"{settings.runtime_env} requires Redis. "
-                "Set CCE_REQUIRE_REDIS=false to allow the local-file fallback."
-            )
+        # An injected store short-circuits backend selection entirely: a fake
+        # satisfying ports.ZSetStore needs no file and no Redis, so invariants
+        # like "a refused transition writes nothing" are assertable directly.
+        if store is not None:
+            self._store: ZSetStore = store
+            self._mode = "injected"
         else:
-            self._backend = self._make_local(local_store_path)
-            self._mode = "local"
+            # Degrading to the per-process local store would let each replica keep
+            # its own divergent transaction state, so make_kv_backend raises instead
+            # wherever the environment requires Redis.
+            backend, mode = make_kv_backend(
+                "TransactionStateMachine",
+                local_factory=lambda: self._make_local(local_store_path),
+                redis_url=redis_url,
+            )
+            # The only place the backend's identity is consulted. Past this line
+            # the state machine holds a ZSetStore and never asks again.
+            self._store = (
+                RedisZSetAdapter(backend) if mode == REDIS_MODE
+                else LocalZSetAdapter(backend)
+            )
+            self._mode = mode
+        # The RISK_CHECK gate is injected rather than hardcoded. The default is
+        # the amount-vs-threshold rule this class has always applied; see
+        # L2_oltp/risk.py for what a feature-reading evaluator would additionally
+        # need from the platform.
+        self._risk_evaluator: RiskEvaluator = risk_evaluator or ThresholdRiskEvaluator()
 
     @staticmethod
-    def _make_local(path: Path | None) -> _LocalStateStore:
-        from .config import settings
+    def _make_local(path: Path | None) -> LocalZSetStore:
+        from ..L0_configuration import settings
         default = settings.base_dir / "data" / "online" / "txn_state_machine.json"
-        return _LocalStateStore(path or default)
+        return LocalZSetStore(path or default)
 
     # -- Key helpers ---------------------------------------------------------
 
@@ -312,25 +233,28 @@ class TransactionStateMachine:
     # -- Internal helpers ----------------------------------------------------
 
     def _parse_member(self, member: str) -> tuple[TxnState, str]:
-        """member format: '{state}:{event_id}'"""
-        state_str, event_id = member.split(":", 1)
-        return TxnState(state_str), event_id
+        """Extract just the state and event id, for callers that need no attribution."""
+        record = decode_member(member)
+        return TxnState(record.state), record.event_id
 
-    def _make_member(self, state: TxnState, event_id: str) -> str:
-        return f"{state.value}:{event_id}"
+    def _make_member(
+        self,
+        state: TxnState,
+        event_id: str,
+        actor: str = "",
+        reason: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
+        """Encode one transition, attribution included — see `audit.py` for why.
 
-    def _get_current_member_redis(self, txn_id: str) -> str | None:
-        key = self._zset_key(txn_id)
-        results = self._backend.zrevrange(key, 0, 0)
-        return results[0] if results else None
-
-    def _get_current_member_local(self, txn_id: str) -> str | None:
-        return self._backend.zrevrange_top1(self._zset_key(txn_id))
+        `state.value` rather than the member itself: for a `str`-mixin Enum,
+        f-string interpolation renders as `TxnState.PENDING` (3.11+), which would
+        put the class name into stored audit data.
+        """
+        return encode_member(state.value, event_id, actor, reason, metadata)
 
     def _get_current_member(self, txn_id: str) -> str | None:
-        if self._mode == "redis":
-            return self._get_current_member_redis(txn_id)
-        return self._get_current_member_local(txn_id)
+        return self._store.newest_member(self._zset_key(txn_id))
 
     # -- Public API ----------------------------------------------------------
 
@@ -364,7 +288,9 @@ class TransactionStateMachine:
 
         event_id = str(uuid4())
         ts = time.time()
-        member = self._make_member(TxnState.PENDING, event_id)
+        member = self._make_member(
+            TxnState.PENDING, event_id, actor=actor, reason="init", metadata=metadata or {}
+        )
 
         meta = {
             "txn_id":       txn_id,
@@ -374,12 +300,8 @@ class TransactionStateMachine:
             "created_at":   str(ts),
         }
 
-        if self._mode == "redis":
-            self._backend.zadd(self._zset_key(txn_id), {member: ts})
-            self._backend.hset(self._meta_key(txn_id), mapping=meta)
-        else:
-            self._backend.zadd(self._zset_key(txn_id), ts, member)
-            self._backend.hset(self._meta_key(txn_id), mapping=meta)
+        self._store.append_scored(self._zset_key(txn_id), ts, member)
+        self._store.put_fields(self._meta_key(txn_id), meta)
 
         transition = StateTransition(
             txn_id=txn_id,
@@ -427,12 +349,18 @@ class TransactionStateMachine:
             event_id = str(uuid4())
             # Use microsecond precision to preserve ordering within the same second
             ts = time.time() + attempt * 1e-6   # tiny offset avoids score collision on retry
-            member = self._make_member(to_state, event_id)
+            # `.value` on both sides: for a str-mixin Enum, f-string interpolation
+            # renders as `TxnState.APPROVED` (3.11+), and this reason is now stored
+            # audit data rather than a log line, so it has to read as the state name.
+            effective_reason = reason or f"{current_state.value}→{to_state.value}"
+            member = self._make_member(
+                to_state, event_id,
+                actor=actor, reason=effective_reason, metadata=metadata or {},
+            )
 
-            if self._mode == "redis":
-                success = self._advance_redis(txn_id, current_member, member, ts)
-            else:
-                success = self._advance_local(txn_id, current_member, member, ts)
+            success = self._store.compare_and_append(
+                self._zset_key(txn_id), current_member, member, ts
+            )
 
             if success:
                 transition = StateTransition(
@@ -441,7 +369,7 @@ class TransactionStateMachine:
                     to_state=to_state,
                     event_id=event_id,
                     actor=actor,
-                    reason=reason or f"{current_state}→{to_state}",
+                    reason=effective_reason,
                     timestamp=ts,
                     metadata=metadata or {},
                 )
@@ -456,36 +384,6 @@ class TransactionStateMachine:
             f"Could not advance {txn_id!r} to {to_state} after {self._MAX_RETRIES} retries"
         )
 
-    def _advance_redis(
-        self, txn_id: str, expected_member: str, new_member: str, ts: float
-    ) -> bool:
-        """WATCH / MULTI / EXEC optimistic lock pattern."""
-        key = self._zset_key(txn_id)
-        with self._backend.pipeline() as pipe:
-            try:
-                pipe.watch(key)
-                # Re-read under watch to detect concurrent modification
-                top = pipe.zrevrange(key, 0, 0)
-                if top and top[0] != expected_member:
-                    pipe.unwatch()
-                    return False
-                pipe.multi()
-                pipe.zadd(key, {new_member: ts})
-                pipe.execute()
-                return True
-            except Exception:  # WatchError or connection error
-                return False
-
-    def _advance_local(
-        self, txn_id: str, expected_member: str, new_member: str, ts: float
-    ) -> bool:
-        """Re-read and compare for local backend (single-process optimistic lock)."""
-        current = self._backend.zrevrange_top1(self._zset_key(txn_id))
-        if current != expected_member:
-            return False
-        self._backend.zadd(self._zset_key(txn_id), ts, new_member)
-        return True
-
     def get_current_state(self, txn_id: str) -> TxnState:
         member = self._get_current_member(txn_id)
         if member is None:
@@ -494,47 +392,56 @@ class TransactionStateMachine:
         return state
 
     def get_history(self, txn_id: str) -> list[StateTransition]:
-        """Return full state history in chronological order."""
-        if self._mode == "redis":
-            entries = self._backend.zrange(self._zset_key(txn_id), 0, -1, withscores=True)
-        else:
-            entries = self._backend.zrange_all(self._zset_key(txn_id))
+        """Return full state history in chronological order, attribution included.
+
+        Entries written before attribution was stored come back with
+        `attributed=False` and empty `actor`/`reason` — unknown, not blank. An
+        audit view should render that distinction rather than an empty operator.
+        """
+        entries = self._store.all_entries(self._zset_key(txn_id))
 
         history: list[StateTransition] = []
         prev_state: TxnState | None = None
         for member, score in entries:
-            state, event_id = self._parse_member(member)
+            record = decode_member(member)
+            state = TxnState(record.state)
             history.append(StateTransition(
                 txn_id=txn_id,
                 from_state=prev_state,
                 to_state=state,
-                event_id=event_id,
-                actor="",      # actor not persisted in ZSET member (kept minimal)
-                reason="",
+                event_id=record.event_id,
+                actor=record.actor,
+                reason=record.reason,
                 timestamp=score,
-                metadata={},
+                metadata=dict(record.metadata),
+                attributed=record.attributed,
             ))
             prev_state = state
         return history
 
     def get_transaction_meta(self, txn_id: str) -> dict[str, str]:
-        if self._mode == "redis":
-            return self._backend.hgetall(self._meta_key(txn_id))
-        return self._backend.hgetall(self._meta_key(txn_id))
+        return self._store.get_fields(self._meta_key(txn_id))
+
+    def evaluate_risk(self, txn_id: str) -> RiskDecision:
+        """Run the configured risk evaluator against this transaction.
+
+        Returns the full decision including provenance. `should_compliance_hold`
+        is the boolean-only shorthand over this.
+        """
+        meta = self.get_transaction_meta(txn_id)
+        return self._risk_evaluator.evaluate(txn_id, meta)
 
     def should_compliance_hold(self, txn_id: str) -> bool:
         """
-        Returns True if this transaction should be routed through COMPLIANCE_HOLD
-        based on product type and amount thresholds (CCE-specific rule).
+        Returns True if this transaction should be routed through COMPLIANCE_HOLD.
+
+        Delegates to the configured RiskEvaluator, which defaults to the
+        amount-vs-threshold rule using business policy loaded from config (see
+        policy.py), so a regulatory change is a config edit rather than a code
+        release. Products without a configured threshold are never held on
+        amount alone.
         """
-        meta = self.get_transaction_meta(txn_id)
-        product = meta.get("product", "")
-        try:
-            amount = float(meta.get("amount", 0))
-        except (ValueError, TypeError):
-            amount = 0.0
-        threshold = COMPLIANCE_HOLD_THRESHOLD.get(product, float("inf"))
-        return amount >= threshold
+        return self.evaluate_risk(txn_id).hold
 
     def run_auto_advance(self, txn_id: str, actor: str = "auto_engine") -> list[StateTransition]:
         """
@@ -552,8 +459,18 @@ class TransactionStateMachine:
         t1 = self.advance(txn_id, TxnState.RISK_CHECK, actor=actor, reason="auto_risk_check")
         transitions.append(t1)
 
-        if self.should_compliance_hold(txn_id):
-            t2 = self.advance(txn_id, TxnState.COMPLIANCE_HOLD, actor=actor, reason="amount_threshold")
+        decision = self.evaluate_risk(txn_id)
+        if decision.hold:
+            # reason/metadata carry the evaluator's provenance so the hold is
+            # explainable. Note advance() logs but does not persist them — see
+            # the audit gap in docs/ARCHITECTURE_OLTP_BOUNDARY.md.
+            t2 = self.advance(
+                txn_id,
+                TxnState.COMPLIANCE_HOLD,
+                actor=actor,
+                reason=decision.reason,
+                metadata=dict(decision.metadata, evaluator=decision.evaluator_version),
+            )
             transitions.append(t2)
 
         t3 = self.advance(txn_id, TxnState.APPROVED, actor=actor, reason="auto_approved")
@@ -561,7 +478,7 @@ class TransactionStateMachine:
         return transitions
 
     def close(self) -> None:
-        self._backend.close()
+        self._store.close()
 
     def __enter__(self) -> "TransactionStateMachine":
         return self

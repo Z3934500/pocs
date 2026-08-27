@@ -29,10 +29,10 @@ Window definitions:
   - TumblingEventTimeWindows(5 minutes)             → fraud velocity check
 
 Usage (local simulation, no Flink cluster needed):
-  python -m cce_platform.flink_cdc_pipeline run
+  python -m cce_platform.L2_olap.flink_cdc_pipeline run
 
 Usage (Flink cluster, requires PyFlink + Kafka):
-  python -m cce_platform.flink_cdc_pipeline submit
+  python -m cce_platform.L2_olap.flink_cdc_pipeline submit
 """
 
 from __future__ import annotations
@@ -104,7 +104,7 @@ def _build_flink_pipeline(
     except ImportError as exc:
         raise RuntimeError(
             "PyFlink is not installed. Run: pip install apache-flink>=1.18.0\n"
-            "For local simulation without Flink, use: python -m cce_platform.flink_cdc_pipeline run"
+            "For local simulation without Flink, use: python -m cce_platform.L2_olap.flink_cdc_pipeline run"
         ) from exc
 
     env = StreamExecutionEnvironment.get_execution_environment()
@@ -380,7 +380,7 @@ def run_local_simulation(
     from .realtime import read_cdc_events, write_sample_cdc_events
     from .pipeline import resolve_unified_key, normalize_identifier
     from .online_store import LocalOnlineStore
-    from .config import settings
+    from ..L0_configuration import settings
 
     source = events_path or settings.cdc_events_path
     if not source.exists():

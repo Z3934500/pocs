@@ -18,7 +18,10 @@ Key设计：
   cart:priority:{unified_customer_key} → ZSET，member=product_code，score=priority_weight
   cart:expiry:{unified_customer_key}   → ZSET，member=product_item_id，score=expiry_ts
 
-本地PoC用_LocalStateStore（来自redis_state_machine）回退，无需Redis集群。
+本地PoC用 kv_backend.LocalZSetStore 回退（与状态机共用），无需Redis集群。
+
+产品优先级与报价有效期属于业务策略，由 policy.py 从配置加载（见
+config/business_policy.json），改数字不需要改代码、发版本。
 
 Replica constraint:
   The local fallback is per-process, so carts are NOT shared between pods.
@@ -33,7 +36,9 @@ Replica constraint:
   instead of degrading (see config.py).
 
 用法：
-  from cce_platform.cart_zset import CartService, CartItem, ProductCodecart = CartService()
+  from cce_platform.L2_olap.cart_zset import CartService, CartItem, ProductCode
+
+  cart = CartService()
   cart.add_item("U0001", CartItem(product=ProductCode.INSURANCE, amount=1380.0, quote_valid_minutes=30))
   cart.add_item("U0001", CartItem(product=ProductCode.INVESTMENT, amount=2100.0))
   items = cart.get_items("U0001")          # 按加入时间排序
@@ -47,13 +52,16 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import time
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
+from datetime import datetime, UTC
 from enum import Enum
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
+
+from ..L1_mechanism import LocalZSetStore, REDIS_MODE, make_kv_backend
+from ..L1_business_data import product_priority, quote_validity_minutes
 
 logger = logging.getLogger(__name__)
 
@@ -72,28 +80,9 @@ class ProductCode(str, Enum):
     CARD= "CARD"
 
 
-# Priority weights for ranked display (higher = shown first)
-# Based on CCE campaign rules: high-margin products ranked higher
-PRODUCT_PRIORITY: dict[ProductCode, float] = {
-    ProductCode.PREMIUM_FINANCING:  10.0,
-    ProductCode.INVESTMENT_LINKED:   9.0,
-    ProductCode.INVESTMENT:          8.0,
-    ProductCode.INSURANCE:           7.0,
-    ProductCode.TRAVEL_INSURANCE:    6.0,
-    ProductCode.SAVINGS:             5.0,
-    ProductCode.CARD:                4.0,
-}
-
-# Quote validity (minutes) for products with time-limited pricing
-DEFAULT_QUOTE_VALIDITY: dict[ProductCode, int] = {
-    ProductCode.PREMIUM_FINANCING: 60,    # 1 hour — rate-sensitive
-    ProductCode.INVESTMENT_LINKED: 30,    # 30 min — NAV changes daily
-    ProductCode.INVESTMENT:        30,
-    ProductCode.INSURANCE:         1440,  # 24 hours — stable pricing
-    ProductCode.TRAVEL_INSURANCE:  120,
-    ProductCode.SAVINGS:           0,     # 0 = no expiry
-    ProductCode.CARD:              0,
-}
+# Display ranking and quote validity are business policy (campaign-owned), not
+# infrastructure — loaded from config via policy.py rather than hardcoded here.
+# See product_priority() and quote_validity_minutes().
 
 
 # ---------------------------------------------------------------------------
@@ -112,12 +101,12 @@ class CartItem:
     metadata:            dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        # Auto-set priority from catalogue
+        # Priority and quote validity come from business policy (policy.py), so
+        # a campaign change takes effect without a code release.
         if self.priority == 0.0:
-            self.priority = PRODUCT_PRIORITY.get(self.product, 1.0)
-        # Auto-set expiry if not provided
+            self.priority = product_priority(self.product.value)
         if self.expiry_ts == 0.0:
-            valid_minutes = DEFAULT_QUOTE_VALIDITY.get(self.product, 0)
+            valid_minutes = quote_validity_minutes(self.product.value)
             if valid_minutes > 0:
                 self.expiry_ts = self.add_ts + valid_minutes * 60
 
@@ -166,75 +155,17 @@ class CartSummary:
 
 
 # ---------------------------------------------------------------------------
-# Local backend (reuses pattern from redis_state_machine._LocalStateStore)
+# Local backend
 # ---------------------------------------------------------------------------
 
-class _LocalCartStore:
-    """File-backed fallback — same pattern as _LocalStateStore."""
+def _cart_member_identity(member: str) -> str:
+    """Two cart members are the same entry when their item_id matches.
 
-    def __init__(self, path: Path) -> None:
-        self._path = path
-
-    def _load(self) -> dict[str, Any]:
-        if not self._path.exists():
-            return {}
-        with self._path.open("r", encoding="utf-8") as fh:
-            return json.load(fh)
-
-    def _save(self, data: dict[str, Any]) -> None:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self._path.with_suffix(f"{self._path.suffix}.tmp")
-        with tmp.open("w", encoding="utf-8") as fh:
-            json.dump(data, fh, indent=2, sort_keys=True)
-        tmp.replace(self._path)
-
-    def zadd(self, key: str, score: float, member: str) -> None:
-        data = self._load()
-        zset: list[list] = data.get(key, [])
-        # Remove existing member with same item_id (update semantics)
-        try:
-            item_id = json.loads(member).get("item_id")
-            zset = [e for e in zset if json.loads(e[1]).get("item_id") != item_id]
-        except Exception:
-            zset = [e for e in zset if e[1] != member]
-        zset.append([score, member])
-        zset.sort(key=lambda e: e[0])
-        data[key] = zset
-        self._save(data)
-
-    def zrem(self, key: str, item_id: str) -> int:
-        """Remove by item_id (not raw member string)."""
-        data = self._load()
-        zset: list[list] = data.get(key, [])
-        before = len(zset)
-        zset = [e for e in zset if json.loads(e[1]).get("item_id") != item_id]
-        data[key] = zset
-        self._save(data)
-        return before - len(zset)
-
-    def zrange_all(self, key: str) -> list[tuple[str, float]]:
-        data = self._load()
-        return [(e[1], e[0]) for e in data.get(key, [])]
-
-    def zcard(self, key: str) -> int:
-        data = self._load()
-        return len(data.get(key, []))
-
-    def delete(self, key: str) -> None:
-        data = self._load()
-        data.pop(key, None)
-        self._save(data)
-
-    def zrangebyscore(self, key: str, min_score: float, max_score: float) -> list[tuple[str, float]]:
-        """Return members with score in [min_score, max_score]."""
-        return [
-            (member, score)
-            for member, score in self.zrange_all(key)
-            if min_score <= score <= max_score
-        ]
-
-    def close(self) -> None:
-        pass
+    This is the one behaviour that differs from the state machine's store, which
+    compares whole member strings. Passing it to LocalZSetStore keeps re-adding
+    an item as an in-place update without duplicating the store class.
+    """
+    return json.loads(member)["item_id"]
 
 
 # ---------------------------------------------------------------------------
@@ -256,52 +187,23 @@ class CartService:
     def __init__(
         self,
         redis_url: str | None = None,
-        local_store_path: Path | None = None,) -> None:
-        from .config import settings
-
-        url = redis_url or os.getenv("REDIS_URL")
-        if url:
-            try:
-                self._backend, self._mode = self._make_redis(url), "redis"
-                logger.info("CartService: Redis backend at %s", url)
-            except Exception as exc:
-                if settings.require_redis:
-                    # The local backend is per-process: degrading here would give
-                    # each replica its own cart, so a customer's basket would
-                    # change depending on which pod served the request.
-                    raise RuntimeError(
-                        f"CartService: Redis at {url} is unreachable ({exc}) and "
-                        f"CCE_RUNTIME_ENV={settings.runtime_env} requires it. "
-                        "Set CCE_REQUIRE_REDIS=false to allow the local-file fallback."
-                    ) from exc
-                logger.warning("CartService: Redis unavailable (%s), using local store", exc)
-                self._backend = self._make_local(local_store_path)
-                self._mode = "local"
-        elif settings.require_redis:
-            raise RuntimeError(
-                f"CartService: REDIS_URL is not set but CCE_RUNTIME_ENV="
-                f"{settings.runtime_env} requires Redis. "
-                "Set CCE_REQUIRE_REDIS=false to allow the local-file fallback."
-            )
-        else:
-            self._backend = self._make_local(local_store_path)
-            self._mode = "local"
+        local_store_path: Path | None = None,
+    ) -> None:
+        # The local backend is per-process: degrading would give each replica its
+        # own cart, so a customer's basket would change depending on which pod
+        # served the request. make_kv_backend raises instead wherever the
+        # environment requires Redis.
+        self._backend, self._mode = make_kv_backend(
+            "CartService",
+            local_factory=lambda: self._make_local(local_store_path),
+            redis_url=redis_url,
+        )
 
     @staticmethod
-    def _make_redis(url: str):
-        try:
-            import redis  # type: ignore[import]
-        except ImportError as exc:
-            raise ImportError("pip install redis>=5.0") from exc
-        client = redis.Redis.from_url(url, decode_responses=True, socket_connect_timeout=3)
-        client.ping()
-        return client
-
-    @staticmethod
-    def _make_local(path: Path | None) -> _LocalCartStore:
-        from .config import settings
+    def _make_local(path: Path | None) -> LocalZSetStore:
+        from ..L0_configuration import settings
         default = settings.base_dir / "data" / "online" / "cart_store.json"
-        return _LocalCartStore(path or default)
+        return LocalZSetStore(path or default, member_identity=_cart_member_identity)
 
     # -- Key helpers ---------------------------------------------------------
 
@@ -320,13 +222,13 @@ class CartService:
     # -- Internal ZSET ops ---------------------------------------------------
 
     def _zadd(self, key: str, score: float, member: str) -> None:
-        if self._mode == "redis":
+        if self._mode == REDIS_MODE:
             self._backend.zadd(key, {member: score})
         else:
             self._backend.zadd(key, score, member)
 
     def _zrange_all(self, key: str) -> list[tuple[str, float]]:
-        if self._mode == "redis":
+        if self._mode == REDIS_MODE:
             return self._backend.zrange(key, 0, -1, withscores=True)
         return self._backend.zrange_all(key)
 
@@ -336,8 +238,8 @@ class CartService:
         return sorted(entries, key=lambda e: e[1], reverse=True)
 
     def _zrem(self, key: str, item_id: str) -> None:
-        if self._mode == "redis":
-            # In Redis mode: fetch member, then ZREM
+        if self._mode == REDIS_MODE:
+            # Redis ZREM matches the whole member, so find it by item_id first.
             for member, _ in self._zrange_all(key):
                 try:
                     if json.loads(member).get("item_id") == item_id:
@@ -346,13 +248,10 @@ class CartService:
                 except Exception:
                     pass
         else:
-            self._backend.zrem(key, item_id)
+            self._backend.zrem_by_identity(key, item_id)
 
     def _delete(self, key: str) -> None:
-        if self._mode == "redis":
-            self._backend.delete(key)
-        else:
-            self._backend.delete(key)
+        self._backend.delete(key)
 
     # -- Public API ----------------------------------------------------------
 
@@ -368,7 +267,7 @@ class CartService:
         """
         member = item.to_member()
 
-        if self._mode == "redis":
+        if self._mode == REDIS_MODE:
             # Use pipeline for multi-key atomicity
             with self._backend.pipeline() as pipe:
                 pipe.zadd(self._items_key(customer_key),    {member: item.add_ts})
@@ -414,7 +313,7 @@ class CartService:
         """
         now = time.time()
         deadline = now + within_minutes * 60
-        if self._mode == "redis":
+        if self._mode == REDIS_MODE:
             entries = self._backend.zrangebyscore(
                 self._expiry_key(customer_key), now, deadline, withscores=True
             )
@@ -522,7 +421,10 @@ class CartService:
         return {
             "table":        "cart_events",
             "op":           "snapshot",
-            "event_ts":     __import__("datetime").datetime.utcnow().isoformat(timespec="seconds"),
+            # Offset-aware, matching oltp.outbox. The naive utcnow() this
+            # replaced serialized without an offset, so the consumer's
+            # fromisoformat().timestamp() read it back as local time.
+            "event_ts":     datetime.now(UTC).isoformat(timespec="seconds"),
             "after": {
                 "cart_id":           f"SNAP-{customer_key}-{int(time.time())}",
                 "unified_customer_key": customer_key,

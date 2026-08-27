@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
-from .config import settings
+from ..L0_configuration import settings
 from .online_store import LocalOnlineStore
 from .pipeline import resolve_unified_key
 
@@ -103,8 +103,20 @@ def process_cdc_events(
     )
 
     unresolved = 0
+    duplicates = 0
     processed_at = utc_now()
+    # At-least-once delivery: a consumer restart, rebalance or unacknowledged
+    # offset redelivers events. `event_id` is a deterministic uuid5 over
+    # (table, op, key, event_ts), so a redelivery is byte-identical and can be
+    # recognised. The aggregates below are sums, so an unfiltered duplicate does
+    # not surface as an error anywhere -- it surfaces as a wrong order count and
+    # a wrong spend, which then feed rt_intent_score and campaign eligibility.
+    seen_event_ids: set[str] = set()
     for event in events:
+        if event.event_id in seen_event_ids:
+            duplicates += 1
+            continue
+        seen_event_ids.add(event.event_id)
         customer_key = resolve_event_customer(event.after)
         if not customer_key:
             unresolved += 1
@@ -141,7 +153,8 @@ def process_cdc_events(
     upserted = LocalOnlineStore(store_path).bulk_upsert(payloads)
     return {
         "events_read": len(events),
-        "events_processed": len(events) - unresolved,
+        "events_deduplicated": duplicates,
+        "events_processed": len(events) - unresolved - duplicates,
         "unresolved_events": unresolved,
         "customers_updated": upserted,
     }

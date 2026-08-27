@@ -26,7 +26,7 @@ import logging
 import os
 from pathlib import Path
 
-from .db import connect, init_schema
+from ..L1_mechanism import connect, init_schema
 from .online_store import make_online_store
 from .pipeline import run_pipeline
 
@@ -61,7 +61,7 @@ def _fetch_gold_rows_sqlite() -> list[dict]:
         feature_count = conn.execute("SELECT COUNT(*) FROM gold_customer_features").fetchone()[0]
         model_score_count = conn.execute("SELECT COUNT(*) FROM gold_customer_model_scores").fetchone()[0]
     if feature_count == 0 or model_score_count == 0:
-        run_pipeline(reset=True)
+        run_pipeline()
 
     with connect() as conn:
         return [dict(row) for row in conn.execute(_SQLITE_GOLD_QUERY).fetchall()]

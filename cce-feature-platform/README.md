@@ -101,17 +101,16 @@ FastAPI / dashboard / downstream campaign tools
 
 ## Local Run
 
-From the local app directory:
+From the repository root:
 
 ```powershell
-cd 01_foundation/01_poc_pilot_users/dev/local_app
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
 python -m pip install -e .
 $env:PYTHONPATH="src"
-python -m cce_platform.pipeline run
-python -m uvicorn cce_platform.api:app --host 127.0.0.1 --port 8010
+python -m cce_platform.L2_olap.pipeline run
+python -m uvicorn cce_platform.L2_olap.api:app --host 127.0.0.1 --port 8010
 ```
 
 Open:
@@ -140,8 +139,8 @@ GET /api/lineage
 After running the batch pipeline, load Gold features into the online store and apply CDC-style updates:
 
 ```powershell
-python -m cce_platform.batch_importer --replace
-python -m cce_platform.realtime run
+python -m cce_platform.L2_olap.batch_importer --replace
+python -m cce_platform.L2_olap.realtime run
 ```
 
 The importer is the last hop of the batch feature path, not the thing that computes features:
@@ -181,9 +180,10 @@ replicas — and it is the line to remove first when a real Redis exists.
 
 Multiple replicas are safe for the Feature API on the local fallback because everything it serves
 is derived read-only data: SQLite and the online store are both rebuilt from the deterministic Gold
-pipeline, so every pod computes the same result. That does not extend to `cart_zset` or
-`redis_state_machine`, which hold authoritative mutable state that no pod can recompute. Neither is
-wired into `api.py` today; their module docstrings carry the same warning.
+pipeline, so every pod computes the same result. That reasoning does not extend to any module
+holding authoritative mutable state that no pod can recompute — `cart_zset` and the transactional
+package are both in that category, neither is wired into `api.py` today, and their module docstrings
+carry the warning.
 
 ### Flink CDC Pipeline (Extension)
 
@@ -191,10 +191,10 @@ The `realtime.py` module is a batch simulation. For production workloads the `fl
 
 ```powershell
 # Local simulation — no Flink cluster required, reuses same dedup + intent-score logic
-python -m cce_platform.flink_cdc_pipeline run
+python -m cce_platform.L2_olap.flink_cdc_pipeline run
 
 # Submit to a running Flink cluster (requires PyFlink + Kafka)
-python -m cce_platform.flink_cdc_pipeline submit --kafka-brokers localhost:9092
+python -m cce_platform.L2_olap.flink_cdc_pipeline submit --kafka-brokers localhost:9092
 ```
 
 **When Flink is required instead of the batch simulation:**
@@ -202,51 +202,38 @@ python -m cce_platform.flink_cdc_pipeline submit --kafka-brokers localhost:9092
 | Scenario | Why Flink, not batch |
 |----------|---------------------|
 | CDC events arrive out of order across Kafka partitions | Flink Event Time + Watermark correctly assigns events to windows; batch re-scan cannot |
-| Exactly-once dedup across restarts | Flink Checkpoint + RocksDB keyed state + `stable_event_id`; batch re-run may double-count |
+| Exactly-once dedup across restarts | Flink keyed state survives via checkpoints; the batch filter is an in-memory set, so it dedupes within a run only — re-running is safe merely because aggregates are recomputed from the whole file, and a producer retry minting a fresh `event_id` defeats both |
 | `rt_order_count_1d` must use a true sliding window | Flink `SlidingEventTimeWindows(1d, 1min slide)` increments in place; batch scans full history every run |
 | Fraud velocity check (5 transactions in 5 minutes) | Flink CEP `Pattern.begin().times(5).within(5 min)`; impossible in a periodic batch job |
 | `PREMIUM_FINANCING` / `INVESTMENT` amounts must not be double-billed | Flink exactly-once sink with Redis `MULTI/EXEC` per checkpoint boundary |
 
 Fallback is explicit rather than automatic: `run` mode simulates the pipeline locally and writes to `LocalOnlineStore`, while `submit` mode targets a Flink cluster and requires a reachable Redis — its sink raises on a missing `redis-py` or an unreachable host instead of no-opping, so a job cannot report RUNNING while discarding every feature update. If PyFlink is not installed the `submit` command raises a clear error while `run` still works.
 
-### Financial Transaction State Machine
+### Transactional Side (Separate Package)
 
-The `redis_state_machine` module implements a ZSET-backed state machine for financial order lifecycle management:
+Transaction lifecycle, the transactional outbox and T+N settlement scheduling are
+**not** part of the feature platform's story and are documented separately, in
+[`src/cce_platform/L2_oltp/README.md`](src/cce_platform/L2_oltp/README.md).
 
-```python
-from cce_platform.redis_state_machine import TransactionStateMachine, TxnState
+That package owns write authority over state no pipeline can recompute, which is
+a different concern from everything above: the Gold tables and
+`cce:features:{key}` are recomputable derived data, so a lost row is a rerun,
+while a lost settlement obligation is money that never moves. Imports may point
+from `cce_platform.L2_oltp` into `cce_platform.*` and never the reverse — the batch
+pipeline, the Feature API and the online store all still run with that package
+absent, and `tests/test_oltp.py::BoundaryTest` enforces it.
 
-sm = TransactionStateMachine()   # Redis if REDIS_URL set; local JSON only where the fallback is allowed
-sm.init_transaction("TXN-001", amount=1700.0, product="PREMIUM_FINANCING", customer_key="U0005")
-sm.run_auto_advance("TXN-001")   # PENDING → RISK_CHECK → COMPLIANCE_HOLD → APPROVED
-sm.advance("TXN-001", TxnState.PENDING_SETTLE, actor="scheduler")
-# ... T+2 settlement date arrives ...
-sm.advance("TXN-001", TxnState.SETTLEMENT_IN_PROGRESS, actor="settlement_trigger")
-sm.advance("TXN-001", TxnState.SETTLED, actor="settlement_worker")
-```
-
-State flow:
-
-```
-PENDING → RISK_CHECK → COMPLIANCE_HOLD ┐
-                     ↘ APPROVED ────────┤→ PENDING_SETTLE → SETTLEMENT_IN_PROGRESS → SETTLED
-                       REJECTED (terminal)                ↓
-                                COMPENSATING → COMPENSATED
-```
-
-**Why ZSET instead of a status column:**
-
-- `ZRANGEBYSCORE` gives the full audit trail in O(log n) — required for financial regulatory review.
-- Score = Unix timestamp microseconds: natural ordering without a separate `version` column.
-- `WATCH/MULTI/EXEC` optimistic lock prevents the brain-split scenario where a Saga compensation thread and a normal processing thread race on the same order.
-- `COMPLIANCE_HOLD` threshold is product-aware: `PREMIUM_FINANCING >= 1000 SGD`, `INVESTMENT >= 500 SGD`.
+- [`docs/ARCHITECTURE_OLTP_BOUNDARY.md`](docs/ARCHITECTURE_OLTP_BOUNDARY.md) —
+  architectural position, consistency and failure model, risk-control linkage
+- [`src/cce_platform/L2_oltp/KNOWN_GAPS.md`](src/cce_platform/L2_oltp/KNOWN_GAPS.md) —
+  the three open gaps, and why none of them changes an analytical answer
 
 ### Financial Product Cart (ZSET)
 
 The `cart_zset` module implements a Redis ZSET-backed product basket for insurance and wealth products:
 
 ```python
-from cce_platform.cart_zset import CartService, CartItem, ProductCode
+from cce_platform.L2_olap.cart_zset import CartService, CartItem, ProductCode
 
 cart = CartService()   # Redis if REDIS_URL set; local JSON only where the fallback is allowed
 cart.add_item("U0001", CartItem(product=ProductCode.INVESTMENT, amount=2100.0))
@@ -267,107 +254,53 @@ snapshot = cart.snapshot_to_cdc_event("U0001")                 # feeds flink_cdc
 
 Financial product quotes have time-limited pricing (`INVESTMENT_LINKED` 30 min, `PREMIUM_FINANCING` 60 min). A plain Hash has no native range query on expiry; ZSET score makes expiry lookup O(log n + k).
 
-### Transactional Outbox + T+2 Settlement Scheduler
-
-The `outbox_publisher` module solves the "DB updated, Kafka send failed" atomicity problem and implements T+2 settlement scheduling with holiday awareness:
-
-```python
-from cce_platform.outbox_publisher import (
-    write_outbox_event, EventPublisher,
-    schedule_settlement, SettlementTrigger, HolidayCalendar,
-)
-
-# Step 1 — business code: same transaction as state change
-with connect() as conn:
-    conn.execute("UPDATE orders SET status='PAID' WHERE order_id=?",(order_id,))
-    write_outbox_event(conn, "order", order_id, "OrderPaid", {"amount": 288.0})
-    schedule_settlement(conn, order_id, customer_key, "INVESTMENT", 2100.0)
-    conn.commit()   # outbox row + settlement row committed atomically
-
-# Step 2 — background thread: EventPublisher polls and forwards
-publisher = EventPublisher()
-publisher.start_background()   # polls every 2s, marks SENT after downstream ACK
-
-# Step 3 — background thread: SettlementTrigger fires on T+2 date
-trigger = SettlementTrigger()
-trigger.start_background()     # polls every 10s, advances state machine on due settlements
-```
-
-**Why Transactional Outbox:**
-
-Without it: `UPDATE orders` commits → process crashes before Kafka send → event lost forever, order stuck in `PAID` with no downstream notification.
-
-With it: the outbox row is committed in the same SQLite transaction. Even if the process restarts 100 times, `EventPublisher` will keep retrying until the downstream confirms. `event_id` (UUID5 of aggregate + type + timestamp) guarantees idempotent consumption.
-
-**Concurrent writers against SQLite:**
-
-Both background threads poll while request handlers write, so the warehouse connection sets
-`journal_mode=WAL` and `busy_timeout=5000`. Under the default rollback journal a reader blocks
-writers, and a writer that finds the database locked fails immediately with `database is locked`
-rather than waiting — with a 2s publisher poll and a 10s settlement poll that collision is routine,
-not a load-test artifact. WAL lets readers proceed during a write, and the busy timeout turns the
-remaining overlap into a short wait instead of an error. This is a local-development property, not
-a substitute for the OLTP layer: no RDS or Aurora is in scope yet, which is why SQLite is here at
-all.
-
-`SettlementTrigger` also constructs `TransactionStateMachine` once and caches it. Each construction
-builds a connection pool and pings Redis, and the helper is called once per `run_once()` plus once
-per `complete_settlement()` — that is every 10s poll for the life of the loop. Building it per call
-also changes a Redis outage from "fails once at startup" into "raises on every poll".
-
-**T+2 Holiday Calendar:**
-
-```python
-cal = HolidayCalendar()           # SG + HK holidays 2025-2026 built in
-cal.settle_date(date(2026, 8, 21), t_plus=2)  # Friday → Tuesday 2026-08-25 (skips weekend)
-```
-
-Production: override the holiday set from Consul KV `cce/config/holiday_calendar` so typhoon closures or ad-hoc exchange halts take effect without a code deploy.
-
-| Product | T+N | Reason |
-|---------|-----|--------|
-| `PREMIUM_FINANCING` | T+2 | HKEX standard equities settlement |
-| `INVESTMENT` / `INVESTMENT_LINKED` | T+2 | Fund NAV calculation cycle |
-| `INSURANCE` | T+1 | Policy activation next business day |
-| `SAVINGS` / `CARD` / `TRAVEL_INSURANCE` | T+0 | Immediate activation |
-
 Detailed architecture material:
 
 ```text
-DELIVERY_PLAN.md
-01_foundation/docs/POC_CLASSIFICATION_AND_ROADMAP.md
-02_extensions/01_realtime/docs/REALTIME_FEATURE_PLATFORM_480K.md
-02_extensions/02_mlops/docs/ARCHITECTURE_MLOPS_GRAPHML_DEPLOYMENT.md
-01_foundation/docs/BIG_DATA_EMR_DELTA_EXTENSION.md
-02_extensions/02_mlops/2_1_vector_db/docs/AI_VECTOR_DB_EXTENSION.md
-01_foundation/docs/OPERATIONS_MATURITY_AND_COST.md
+docs/REALTIME_FEATURE_PLATFORM_480K.md
+docs/ARCHITECTURE_MLOPS_GRAPHML_DEPLOYMENT.md
+docs/BIG_DATA_EMR_DELTA_EXTENSION.md
+docs/AI_VECTOR_DB_EXTENSION.md
+docs/OPERATIONS_MATURITY_AND_COST.md
+docs/ARCHITECTURE_OLTP_BOUNDARY.md
 ```
 
 ## Docker Run
 
 ```powershell
-docker build -t cce-feature-platform 01_foundation/01_poc_pilot_users/dev/local_app
+docker build -t cce-feature-platform .
 docker run --rm -p 8010:8000 cce-feature-platform
 ```
 
-## CI/CD
+## Quality Gates
 
-The repository-level workflow is in:
+There is no CI workflow committed in this repository. The gates below are the
+ones that exist and are meant to be run locally before a change is considered
+done — a claim about this codebase is only as good as the gate that guards it.
 
-```text
-.github/workflows/poc-ci.yml
+```powershell
+$env:PYTHONPATH="src"
+python -m unittest discover -s tests   # 66 tests
+cd chaos_testing; python validate_chaos.py --mode local   # 30 checks
 ```
 
-It installs dependencies, runs tests and builds Docker images for both PoCs.
+The unit harness is split by what it guards:
+
+| File | Guards |
+|------|--------|
+| [`tests/test_layers.py`](tests/test_layers.py) (7) | The layer table below is executable, not narration — layer 0 imports nothing internal, layer 1 reaches only layer 0, the import graph is acyclic, and every `L*_` folder prefix equals its measured depth |
+| [`tests/test_oltp.py`](tests/test_oltp.py) (43) | The OLTP boundary, the state machine, and outbox delivery including producer-side retry collapse |
+| [`tests/test_pipeline.py`](tests/test_pipeline.py) (9) | Medallion rebuild, that a redelivered CDC event does not double-count, and that the CLI advertises no mode it does not have |
+| [`tests/test_docs.py`](tests/test_docs.py) (7) | The claims in this file — a documented path must exist in a clone, not just on the author's disk, and every test count above must equal what the loader finds |
 
 ## Chaos Testing
 
-K8s chaos experiments and validation scripts are in `dev/chaos_testing/`.
+K8s chaos experiments and validation scripts are in [`chaos_testing/`](chaos_testing/).
 
 ### Running the validation suite (no K8s cluster needed)
 
 ```powershell
-cd 01_foundation/01_poc_pilot_users/dev/chaos_testing
+cd chaos_testing
 python validate_chaos.py --mode local
 ```
 
@@ -375,11 +308,11 @@ This runs 30 automated checks covering all new modules:
 
 | Check group | What it verifies |
 |-------------|------------------|
-| `state-machine` (8 checks) | Normal lifecycle, compliance hold, invalid transition rejection, idempotent init, saga compensation |
+| `state-machine` (8 checks) | Transaction lifecycle — see [`L2_oltp/README.md`](src/cce_platform/L2_oltp/README.md) |
 | `flink-sim` (4 checks) | Deduplication of 6 duplicate events, intent score range [0,1], feature_source tag |
 | `online-store` (3 checks) | 8-thread concurrent writes, no corruption, all keys present |
 | `cart-zset` (7 checks) | Add/rank/expire/merge/clear/CDC snapshot |
-| `outbox` (8 checks) | Outbox PENDING→SENT, EventPublisher delivery, T+2 holiday calendar, settlement trigger lifecycle |
+| `outbox` (8 checks) | Outbox delivery and settlement scheduling — see [`L2_oltp/README.md`](src/cce_platform/L2_oltp/README.md) |
 
 To run a single check:
 
@@ -426,4 +359,87 @@ Without it, K8s sends SIGTERM immediately after removing the pod from Service en
 This PoC is based on a customer campaign data platform. It separates raw ingestion, standardized identity and feature engineering into Bronze, Silver and Gold layers. The important design point is resolving scattered NRIC, FIN and Passport identifiers into a unified customer key before feature computation, then adding graph-style candidate matching for missing-ID records that need controlled review.
 
 Databricks owns offline customer/policy features, MLflow model runs and drift monitoring. EKS and Redis own the online Feature API, HPA scaling, request-time authorization and low-latency campaign serving. The optional AI vector DB extension adds semantic retrieval over customer features, product/offer documents and similar-customer context for Bedrock/LLM best-offer generation, while Redis remains the deterministic fallback path. This keeps transactional RDS and Databricks workloads isolated from campaign lookup traffic while still giving the models governed features.
+
+### One Naming Convention, In Two Halves
+
+Every folder under `src/cce_platform/` carries an `L<n>_` prefix, and the number
+is a measured property rather than a label: it is the folder's depth in the
+internal import graph. `L1_business_data` is layer 1 only because it imports
+nothing above layer 0 — add one import from it into `L1_mechanism` and the true
+depth becomes 2 while the name still reads `L1_`.
+
+That is why the prefix is itself under test
+(`tests/test_layers.py::test_prefix_matches_the_measured_depth`). A folder name
+is a claim about the import graph, and a claim nothing checks is decoration.
+
+| Folder | Nature | Depends on | Contents |
+| --- | --- | --- | --- |
+| `L0_primitives/` | Pure primitives — no config, no state, no I/O | nothing internal | `ids.py` |
+| `L0_configuration/` | Where deployment facts enter the process | nothing internal | `config.py` |
+| `L0_schema/` | Table shape and ownership, no I/O | nothing internal | `bronze.py`, `silver.py`, `gold.py`, `ops.py`, `mlops.py`, `quality.py` |
+| `L1_mechanism/` | How a store is reached, never what is stored | `L0_configuration`, `L0_schema` | `db.py`, `kv_backend.py` |
+| `L1_business_data/` | The numbers, plus the mechanism that loads them | `L0_configuration` | `policy.py` |
+| `L2_olap/` | Analytical read-and-derive side | layers 0 and 1 | `pipeline.py`, `api.py`, `realtime.py`, … (11 modules) |
+| `L2_oltp/` | Transactional write-authority side | layers 0 and 1 | `store.py`, `state_machine.py`, `risk.py`, … (7 modules) |
+
+```text
+layer 0  L0_primitives/  L0_configuration/  L0_schema/  no internal imports at all
+layer 1  L1_mechanism/  L1_business_data/               reach only into layer 0
+layer 2  L2_olap/  L2_oltp/                             reach into layers 0 and 1
+```
+
+**`L2_olap` and `L2_oltp` are siblings, not a stack.** Both sit at layer 2, both
+reach down into layers 0 and 1, and neither imports the other — measured, not
+merely intended (`tests/test_oltp.py::BoundaryTest`). That independence is what
+lets the batch pipeline and feature API run with `L2_oltp` absent from the tree
+entirely.
+
+`L0_schema/` sits in layer 0 by the same measure as the other layer-0 folders —
+it has no internal imports either — which is why `L1_mechanism/db.py` may import
+both `..L0_configuration` and `..L0_schema` without inverting anything. A cycle,
+or a layer-1 module reaching sideways into another layer-1 module, would show up
+as an import that contradicts this table.
+
+This table is asserted, not just documented — `tests/test_layers.py` parses every
+file under `src/cce_platform/` as an AST and fails on any edge that contradicts
+it:
+
+```bash
+PYTHONPATH=src python -m unittest tests.test_layers -v   # 7 checks
+```
+
+It asserts seven things: layer 0 has no internal imports at all, layer 1 reaches
+only layer 0, the whole internal graph is acyclic, every folder carries an `L<n>_`
+prefix, each prefix equals the measured depth, the folders named in the table
+exist on disk, and the AST scan actually found imports. The last two guard the
+harness itself — deleting `L0_primitives/` would otherwise make every layer-0
+assertion vacuously true, and a scan that silently parsed nothing would make all
+of them pass.
+
+AST rather than `grep`: `from ..L0_configuration import settings` nested inside a
+function body is still a dependency, and a pattern anchored to the start of a
+line would miss it. That is not hypothetical — during the `L<n>_` rename, a `sed`
+anchored on `^from` missed exactly three such deferred imports and produced 16
+`ModuleNotFoundError`s. Each assertion was checked by mutation — injecting an
+upward edge, a sideways edge, a mislabelled prefix, a missing folder and a broken
+scan each turned the corresponding check red before this was written down.
+
+**There is no `decision/` folder.** The original three-way split was data (what
+it is) / mechanism (how it is read) / decision (who judges) — but sorting the
+modules by that rule produced an empty third bucket. None of these five files
+decides anything; they hold numbers and the means to reach them. The judgements
+live with the domain code that makes them:
+
+```text
+amount >= threshold → COMPLIANCE_HOLD      oltp/risk.py
+trade date + T+N over holidays             oltp/outbox.py
+cart ordering by priority                  cart_zset.py
+segment and eligibility assignment         pipeline.py
+```
+
+Keeping the judgement out of `L1_business_data/` is what lets both sides of the
+write-authority boundary read the same thresholds without either side owning
+them. A `decision/` folder would have had to pull code out of `L2_oltp/`, which
+would have broken the boundary invariant to satisfy a naming scheme — the
+wrong trade.
 
