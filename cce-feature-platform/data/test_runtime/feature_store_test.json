@@ -16,9 +16,9 @@
     "rt_order_amount_1d": 288.0,
     "rt_order_count_1d": 1,
     "segment_name": "Priority",
-    "stream_updated_at": "2026-07-02T04:30:18",
+    "stream_updated_at": "2026-08-27T04:27:57",
     "tx_count_30d": 6,
-    "updated_at": "2026-07-02T04:30:18",
+    "updated_at": "2026-08-27T04:27:57",
     "velocity_7d": 5
   },
   "U0002": {
@@ -38,9 +38,9 @@
     "rt_order_amount_1d": 420.0,
     "rt_order_count_1d": 1,
     "segment_name": "Growth",
-    "stream_updated_at": "2026-07-02T04:30:18",
+    "stream_updated_at": "2026-08-27T04:27:57",
     "tx_count_30d": 6,
-    "updated_at": "2026-07-02T04:30:18",
+    "updated_at": "2026-08-27T04:27:57",
     "velocity_7d": 3
   },
   "U0003": {
@@ -60,9 +60,9 @@
     "rt_order_amount_1d": 0.0,
     "rt_order_count_1d": 0,
     "segment_name": "Growth",
-    "stream_updated_at": "2026-07-02T04:30:18",
+    "stream_updated_at": "2026-08-27T04:27:57",
     "tx_count_30d": 6,
-    "updated_at": "2026-07-02T04:30:18",
+    "updated_at": "2026-08-27T04:27:57",
     "velocity_7d": 4
   },
   "U0004": {
@@ -76,7 +76,7 @@
     "risk_score": 0.41,
     "segment_name": "Growth",
     "tx_count_30d": 6,
-    "updated_at": "2026-07-02T04:30:18",
+    "updated_at": "2026-08-27T04:27:57",
     "velocity_7d": 3
   },
   "U0005": {
@@ -96,9 +96,9 @@
     "rt_order_amount_1d": 1650.0,
     "rt_order_count_1d": 1,
     "segment_name": "Priority",
-    "stream_updated_at": "2026-07-02T04:30:18",
+    "stream_updated_at": "2026-08-27T04:27:57",
     "tx_count_30d": 6,
-    "updated_at": "2026-07-02T04:30:18",
+    "updated_at": "2026-08-27T04:27:57",
     "velocity_7d": 3
   },
   "U0006": {
@@ -112,7 +112,7 @@
     "risk_score": 0.635,
     "segment_name": "Value Watch",
     "tx_count_30d": 6,
-    "updated_at": "2026-07-02T04:30:18",
+    "updated_at": "2026-08-27T04:27:57",
     "velocity_7d": 6
   }
 }

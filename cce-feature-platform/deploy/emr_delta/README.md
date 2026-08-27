@@ -2,7 +2,7 @@
 
 PySpark skeletons for running the CCE Bronze -> Silver -> Gold feature pipeline on EMR Serverless, EMR on EKS, EMR on EC2 or any Spark runtime with Delta Lake support.
 
-These scripts are production-shape references. They do not replace the local `src/cce_platform/pipeline.py`; they show how the same feature-platform logic maps to distributed Spark jobs, S3 storage, Delta tables, Glue Catalog and Airflow/MWAA orchestration.
+These scripts are production-shape references. They do not replace the local `src/cce_platform/L2_olap/pipeline.py`; they show how the same feature-platform logic maps to distributed Spark jobs, S3 storage, Delta tables, Glue Catalog and Airflow/MWAA orchestration.
 
 ## Scripts
 

@@ -1,6 +1,6 @@
 # Flink CCE Feature Job — Kubernetes Job manifest
-# Submits cce_platform.flink_cdc_pipeline in submit mode against a running Flink cluster.
-# Local simulation (no cluster): python -m cce_platform.flink_cdc_pipeline run
+# Submits cce_platform.L2_olap.flink_cdc_pipeline in submit mode against a running Flink cluster.
+# Local simulation (no cluster): python -m cce_platform.L2_olap.flink_cdc_pipeline run
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -24,7 +24,7 @@ spec:
           command:
             - python
             - -m
-            - cce_platform.flink_cdc_pipeline
+            - cce_platform.L2_olap.flink_cdc_pipeline
             - submit
           args:
             - --kafka-brokers

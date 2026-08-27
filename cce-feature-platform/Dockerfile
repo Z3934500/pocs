@@ -14,4 +14,4 @@ COPY frontend ./frontend
 
 EXPOSE 8000
 
-CMD ["sh", "-c", "python -m cce_platform.pipeline run && uvicorn cce_platform.api:app --host 0.0.0.0 --port 8000"]
+CMD ["sh", "-c", "python -m cce_platform.L2_olap.pipeline run && uvicorn cce_platform.L2_olap.api:app --host 0.0.0.0 --port 8000"]

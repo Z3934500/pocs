@@ -22,7 +22,7 @@ spec:
             - name: importer
               image: ghcr.io/OWNER/cce-feature-platform:latest
               imagePullPolicy: IfNotPresent
-              command: ["python", "-m", "cce_platform.batch_importer", "--replace"]
+              command: ["python", "-m", "cce_platform.L2_olap.batch_importer", "--replace"]
               env:
                 - name: DATABRICKS_HOST
                   valueFrom:

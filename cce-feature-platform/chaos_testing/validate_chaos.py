@@ -155,12 +155,12 @@ def check_state_machine(report: ValidationReport) -> None:
       - Compliance hold threshold triggers correctly for PREMIUM_FINANCING- Concurrent advance raises ConcurrentModificationError (optimistic lock)
     """
     # Add src to path for local import
-    src_path = Path(__file__).parents[1] / "local_app" / "src"
+    src_path = Path(__file__).parents[1] / "src"
     if str(src_path) not in sys.path:
         sys.path.insert(0, str(src_path))
 
     try:
-        from cce_platform.redis_state_machine import (
+        from cce_platform.L2_oltp import (
             TransactionStateMachine,
             TxnState,
             InvalidTransitionError,
@@ -168,7 +168,10 @@ def check_state_machine(report: ValidationReport) -> None:
             ConcurrentModificationError,
         )
     except ImportError as exc:
-        report.add(CheckResult("state_machine_import", False, f"Import failed: {exc}"))
+        report.add(CheckResult(
+            "state_machine_import", False,
+            f"IMPORT ERROR (not a check failure): {exc}",
+        ))
         return
 
     import tempfile, os
@@ -284,14 +287,14 @@ def check_flink_local_sim(report: ValidationReport) -> None:
       - Duplicate events are not double-counted
       - Intent score is in [0, 1]- All resolvable customers are updated in the online store
     """
-    src_path = Path(__file__).parents[1] / "local_app" / "src"
+    src_path = Path(__file__).parents[1] / "src"
     if str(src_path) not in sys.path:
         sys.path.insert(0, str(src_path))
 
     try:
-        from cce_platform.flink_cdc_pipeline import run_local_simulation
-        from cce_platform.realtime import write_sample_cdc_events
-        from cce_platform.online_store import LocalOnlineStore
+        from cce_platform.L2_olap.flink_cdc_pipeline import run_local_simulation
+        from cce_platform.L2_olap.realtime import write_sample_cdc_events
+        from cce_platform.L2_olap.online_store import LocalOnlineStore
     except ImportError as exc:
         report.add(CheckResult("flink_import", False, f"Import failed: {exc}"))
         return
@@ -358,12 +361,12 @@ def check_online_store_atomicity(report: ValidationReport) -> None:
       - Concurrent writes should not corrupt the JSON file
       - After N concurrent upserts, all customer keys should be present
     """
-    src_path = Path(__file__).parents[1] / "local_app" / "src"
+    src_path = Path(__file__).parents[1] / "src"
     if str(src_path) not in sys.path:
         sys.path.insert(0, str(src_path))
 
     try:
-        from cce_platform.online_store import LocalOnlineStore
+        from cce_platform.L2_olap.online_store import LocalOnlineStore
     except ImportError as exc:
         report.add(CheckResult("online_store_import", False, f"Import failed: {exc}"))
         return
@@ -443,12 +446,12 @@ def check_cart_zset(report: ValidationReport) -> None:
       - Anonymous → authenticated cart merge
       - CDC snapshot export shape
     """
-    src_path = Path(__file__).parents[1] / "local_app" / "src"
+    src_path = Path(__file__).parents[1] / "src"
     if str(src_path) not in sys.path:
         sys.path.insert(0, str(src_path))
 
     try:
-        from cce_platform.cart_zset import CartService, CartItem, ProductCode
+        from cce_platform.L2_olap.cart_zset import CartService, CartItem, ProductCode
     except ImportError as exc:
         report.add(CheckResult("cart_import", False, f"Import failed: {exc}"))
         return
@@ -540,20 +543,25 @@ def check_outbox_and_settlement(report: ValidationReport) -> None:
       - schedule_settlement writes correct settle_date
       - SettlementTrigger.run_once() fires due settlements
     """
-    src_path = Path(__file__).parents[1] / "local_app" / "src"
+    src_path = Path(__file__).parents[1] / "src"
     if str(src_path) not in sys.path:
         sys.path.insert(0, str(src_path))
 
     try:
-        from cce_platform.outbox_publisher import (
+        from cce_platform.L2_oltp import (
             write_outbox_event, EventPublisher,
             schedule_settlement, SettlementTrigger,
             HolidayCalendar, PRODUCT_T_PLUS,
+            TransactionStateMachine, TxnState,
         )
-        from cce_platform.db import connect, init_schema
-        from cce_platform.redis_state_machine import TransactionStateMachine, TxnState
+        # Operational tables live in their own database, owned by oltp.store —
+        # cce_platform.L1_mechanism.init_schema no longer creates them.
+        from cce_platform.L2_oltp.store import connect, init_schema
     except ImportError as exc:
-        report.add(CheckResult("outbox_import", False, f"Import failed: {exc}"))
+        report.add(CheckResult(
+            "outbox_import", False,
+            f"IMPORT ERROR (not a check failure): {exc}",
+        ))
         return
 
     import tempfile

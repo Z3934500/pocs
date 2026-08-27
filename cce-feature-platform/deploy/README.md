@@ -11,7 +11,7 @@ deploy/
 │
 └── app/                    ← Application layer (CI/CD-managed, dev team)
     ├── k8s/                    Kubernetes manifests (Kustomize base)
-    │   ├── flink/              Flink CDC job submission (cce_platform.flink_cdc_pipeline)
+    │   ├── flink/              Flink CDC job submission (cce_platform.L2_olap.flink_cdc_pipeline)
     │   └── kustomize/          Overlays: dev / staging / production
     ├── helm/                   Optional Helm chart for the CCE API runtime
     ├── argocd/                 Argo CD Application + ApplicationSet manifests
@@ -103,8 +103,8 @@ Two run modes — no cluster switch needed for local development.
 
 | Mode | Command | When to use |
 |---|---|---|
-| Local simulation | `python -m cce_platform.flink_cdc_pipeline run` | Dev / PoC, no Flink cluster needed |
-| Cluster submit | `python -m cce_platform.flink_cdc_pipeline submit --kafka-brokers <brokers>` | Staging / Production with MSK |
+| Local simulation | `python -m cce_platform.L2_olap.flink_cdc_pipeline run` | Dev / PoC, no Flink cluster needed |
+| Cluster submit | `python -m cce_platform.L2_olap.flink_cdc_pipeline submit --kafka-brokers <brokers>` | Staging / Production with MSK |
 
 Submit to Kubernetes as a Job:
 
@@ -115,7 +115,7 @@ kubectl apply -n data-platform-pocs -f deploy/app/k8s/flink/flink-cce-job.yaml
 The Job reads `KAFKA_BROKERS` and `REDIS_URL` from Kubernetes Secrets.
 Flink state backend is RocksDB; checkpoints write to S3 via `CCE_CHECKPOINT_DIR`.
 
-Key Flink guarantees (see `src/cce_platform/flink_cdc_pipeline.py`):
+Key Flink guarantees (see `src/cce_platform/L2_olap/flink_cdc_pipeline.py`):
 - Deduplication: event_id keyed state, 1h TTL
 - Watermark: BoundedOutOfOrderness 10 s, late events to DLQ topic
 - Windows: SlidingEventTime (1d / 1min slide) for `rt_*_1d`; Tumbling 5min for fraud velocity
