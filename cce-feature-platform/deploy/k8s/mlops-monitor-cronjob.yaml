@@ -22,7 +22,7 @@ spec:
             - name: mlops-monitor
               image: ghcr.io/OWNER/cce-feature-platform:latest
               imagePullPolicy: IfNotPresent
-              command: ["python", "-m", "cce_platform.pipeline", "run"]
+              command: ["python", "-m", "cce_platform.L2_olap.pipeline", "run"]
               env:
                 - name: MLFLOW_TRACKING_URI
                   value: databricks

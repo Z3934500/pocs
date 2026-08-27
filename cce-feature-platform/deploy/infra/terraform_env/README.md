@@ -1,6 +1,6 @@
 # Environment-Aware Terraform
 
-The original `02_extensions/01_realtime/after_mvp2_dev_stage_prod/deploy/terraform` folder is a compact PoC template. This folder shows the company-style split for Dev, Staging and Production.
+The original flat `deploy/terraform` folder was a compact PoC template and is not part of this repository. This folder shows the company-style split for Dev, Staging and Production.
 
 ```text
 dev        -> cce-feature-platform-dev

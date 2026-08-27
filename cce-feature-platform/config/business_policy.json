@@ -1,0 +1,44 @@
+{
+  "_comment": "Business policy for the CCE platform. Every section is optional and merged over the defaults in src/cce_platform/business_data/policy.py, so this file only needs the values you want to override. Product keys are uppercased on load. Override the path with CCE_POLICY_PATH; mount as a ConfigMap in Kubernetes. Call policy.reload_policy() to pick up edits without a restart.",
+
+  "_comment_compliance": "SGD amount at or above which a transaction routes through COMPLIANCE_HOLD. A product omitted here is never held on amount alone. Set by regulation.",
+  "compliance_hold_threshold_sgd": {
+    "PREMIUM_FINANCING": 1000.0,
+    "INVESTMENT": 500.0,
+    "INVESTMENT_LINKED": 500.0,
+    "INSURANCE": 2000.0
+  },
+
+  "_comment_priority": "Cart display weight; higher sorts first. Owned by whoever runs the campaign.",
+  "product_priority": {
+    "PREMIUM_FINANCING": 10.0,
+    "INVESTMENT_LINKED": 9.0,
+    "INVESTMENT": 8.0,
+    "INSURANCE": 7.0,
+    "TRAVEL_INSURANCE": 6.0,
+    "SAVINGS": 5.0,
+    "CARD": 4.0
+  },
+
+  "_comment_quote": "How long a quote stays valid, in minutes. 0 = never expires.",
+  "quote_validity_minutes": {
+    "PREMIUM_FINANCING": 60,
+    "INVESTMENT_LINKED": 30,
+    "INVESTMENT": 30,
+    "INSURANCE": 1440,
+    "TRAVEL_INSURANCE": 120,
+    "SAVINGS": 0,
+    "CARD": 0
+  },
+
+  "_comment_settlement": "Business days between trade date and settlement. Set by the market.",
+  "product_t_plus": {
+    "PREMIUM_FINANCING": 2,
+    "INVESTMENT": 2,
+    "INVESTMENT_LINKED": 2,
+    "INSURANCE": 1,
+    "TRAVEL_INSURANCE": 0,
+    "SAVINGS": 0,
+    "CARD": 0
+  }
+}

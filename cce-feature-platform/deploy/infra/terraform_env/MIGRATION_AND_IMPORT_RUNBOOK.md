@@ -1,6 +1,6 @@
 # Migration And Import Runbook
 
-Use this runbook when moving existing MSK and Redis resources into `02_extensions/01_realtime/after_mvp2_dev_stage_prod/deploy/terraform_env`.
+Use this runbook when moving existing MSK and Redis resources into `deploy/infra/terraform_env`.
 
 ## 1. Decide Migration Type
 
@@ -14,7 +14,7 @@ Use this runbook when moving existing MSK and Redis resources into `02_extension
 ## 2. Import Existing Dev Resources
 
 ```bash
-cd cce-feature-platform/02_extensions/01_realtime/after_mvp2_dev_stage_prod/deploy/terraform_env
+cd deploy/infra/terraform_env
 terraform init
 terraform workspace new dev || terraform workspace select dev
 
@@ -28,7 +28,7 @@ terraform plan -var-file environments/dev.tfvars
 ## 3. Import Existing Staging Resources
 
 ```bash
-cd cce-feature-platform/02_extensions/01_realtime/after_mvp2_dev_stage_prod/deploy/terraform_env
+cd deploy/infra/terraform_env
 terraform init
 terraform workspace new staging || terraform workspace select staging
 
@@ -44,7 +44,7 @@ terraform plan -var-file environments/staging.tfvars
 Production import should happen during a controlled change window.
 
 ```bash
-cd cce-feature-platform/02_extensions/01_realtime/after_mvp2_dev_stage_prod/deploy/terraform_env
+cd deploy/infra/terraform_env
 terraform init
 terraform workspace new production || terraform workspace select production
 
@@ -59,10 +59,12 @@ Do not run `terraform apply` until the plan is reviewed and no unexpected replac
 
 ## 5. If Moving From Old Terraform State
 
-Back up old state first:
+Back up old state first, from wherever the pre-split PoC template is checked out
+— that flat `deploy/terraform` folder is not part of this repository, so there is
+no path here to `cd` into:
 
 ```bash
-cd cce-feature-platform/02_extensions/01_realtime/after_mvp2_dev_stage_prod/deploy/terraform
+cd <old-poc-checkout>/deploy/terraform
 terraform state pull > old-terraform-state.backup.json
 ```
 
