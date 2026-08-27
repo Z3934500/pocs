@@ -1,0 +1,4 @@
+{"claim_count_12m": 0, "effective_date": "2024-09-01", "id_type": "NRIC", "id_value": "S1234567A", "policy_id": "POL-INS-1001", "policy_status": "ACTIVE", "policy_type": "INSURANCE", "premium_amount": 1380.0, "renewal_due_days": 62}
+{"claim_count_12m": 1, "effective_date": "2025-02-15", "id_type": "FIN", "id_value": "F4455667M", "policy_id": "POL-PF-2005", "policy_status": "ACTIVE", "policy_type": "PREMIUM_FINANCING", "premium_amount": 4600.0, "renewal_due_days": 34}
+{"claim_count_12m": 0, "effective_date": "2025-12-05", "id_type": "FIN", "id_value": "G7654321K", "policy_id": "POL-INV-3003", "policy_status": "PENDING_RENEWAL", "policy_type": "INVESTMENT_LINKED", "premium_amount": 2100.0, "renewal_due_days": 14}
+{"claim_count_12m": 0, "effective_date": "2026-06-01", "id_type": "TEMP", "id_value": "guest-unknown", "policy_id": "POL-TMP-9999", "policy_status": "QUOTE_ONLY", "policy_type": "INSURANCE", "premium_amount": 700.0, "renewal_due_days": 120}

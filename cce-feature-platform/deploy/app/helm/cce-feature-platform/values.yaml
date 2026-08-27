@@ -1,0 +1,40 @@
+replicaCount: 2
+
+image:
+  repository: ghcr.io/OWNER/cce-feature-platform
+  tag: dev
+  pullPolicy: IfNotPresent
+
+runtime:
+  env: dev
+  sqlitePath: /app/data/warehouse/cce_platform.sqlite
+  onlineStorePath: /app/data/online/feature_store.json
+  featureApiDefaultScope: campaign_read
+
+secrets:
+  name: cce-feature-platform-secrets
+  redisUrlKey: redis-url
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8000
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi
+
+hpa:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 5
+  cpuAverageUtilization: 60
+
+monitoring:
+  serviceMonitor:
+    enabled: false
+    interval: 30s
