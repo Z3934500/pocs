@@ -1,4 +1,4 @@
-#  Delivery Portfolio PoCs
+# Delivery Portfolio PoCs
 
 This repository supports the delivery portfolio behind `your-own-domain.example`. It is no longer only a Data Engineering PoC set; it is organized as two practical consulting/delivery directions: **Data** and **Automation**.
 
