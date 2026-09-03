@@ -1,0 +1,365 @@
+# KEDA Configuration for Phase 2: Kafka Lag-Based Autoscaling
+#
+# Prerequisites:
+# 1. KEDA operator installed: kubectl apply -f https://github.com/kedacore/keda/releases/download/v2.14.0/keda-2.14.0.yaml
+# 2. Kafka metrics available via:
+#    - Option A: Prometheus with Kafka Exporter (recommended)
+#    - Option B: AWS CloudWatch Container Insights
+# 3. Kafka consumer group: cce-realtime-feature-stream
+# 4. Topics: cce.rds.orders, cce.rds.cart_events
+#
+# References:
+# - KEDA Kafka scaler: https://keda.sh/docs/latest/scalers/apache-kafka/
+# - ADR-005: Two-Phase Autoscaling Strategy
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: keda-kafka-secrets
+  namespace: cce-platform
+type: Opaque
+stringData:
+  # MSK bootstrap servers (same as stream job uses)
+  bootstrapServers: "b-1.msk-cluster.abc123.kafka.ap-southeast-1.amazonaws.com:9092,b-2.msk-cluster.abc123.kafka.ap-southeast-1.amazonaws.com:9092,b-3.msk-cluster.abc123.kafka.ap-southeast-1.amazonaws.com:9092"
+
+  # If using SASL authentication (uncomment if needed)
+  # sasl: "scram_sha512"
+  # username: "kafka-user"
+  # password: "kafka-password"
+
+---
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: keda-kafka-auth
+  namespace: cce-platform
+spec:
+  secretTargetRef:
+    - parameter: bootstrapServers
+      name: keda-kafka-secrets
+      key: bootstrapServers
+    # Uncomment if using SASL
+    # - parameter: sasl
+    #   name: keda-kafka-secrets
+    #   key: sasl
+    # - parameter: username
+    #   name: keda-kafka-secrets
+    #   key: username
+    # - parameter: password
+    #   name: keda-kafka-secrets
+    #   key: password
+
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: cce-realtime-stream-scaler
+  namespace: cce-platform
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: StatefulSet
+    name: cce-realtime-feature-stream
+
+  # Polling interval: how often KEDA checks Kafka lag
+  pollingInterval: 30  # seconds
+
+  # Cooldown period: wait time before scaling down
+  # StatefulSet scaling is expensive (RocksDB state redistribution)
+  # so we wait longer to avoid thrashing
+  cooldownPeriod: 300  # 5 minutes
+
+  # Idle replica count: if all triggers are inactive, scale to this
+  # We use minReplicaCount instead (idleReplicaCount: 0 would scale to zero)
+  minReplicaCount: 2   # Always keep 2 pods for availability
+  maxReplicaCount: 6   # Match Kafka partition count (6 partitions initially)
+
+  # Advanced scaling behavior (optional, for fine-tuning)
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleDown:
+          stabilizationWindowSeconds: 300  # Match cooldownPeriod
+          policies:
+          - type: Pods
+            value: 1           # Scale down by 1 pod at a time
+            periodSeconds: 300 # Every 5 minutes
+        scaleUp:
+          stabilizationWindowSeconds: 0    # Scale up immediately
+          policies:
+          - type: Pods
+            value: 2           # Scale up by 2 pods at a time (faster response)
+            periodSeconds: 60  # Every minute
+          - type: Percent
+            value: 50          # Or 50% of current replicas, whichever is larger
+            periodSeconds: 60
+          selectPolicy: Max    # Use the policy that scales fastest
+
+  triggers:
+    # Trigger 1: cce.rds.orders topic lag
+    - type: kafka
+      metadata:
+        bootstrapServers: ""  # From TriggerAuthentication
+        consumerGroup: cce-realtime-feature-stream
+        topic: cce.rds.orders
+
+        # Lag threshold per pod
+        # If average lag per pod > 5000, scale up
+        # Formula: total_lag / current_replicas > lagThreshold → scale up
+        lagThreshold: "5000"
+
+        # Activation threshold: KEDA considers this trigger "active" if lag > 100
+        # Below this, treat as idle (but minReplicaCount still applies)
+        activationLagThreshold: "100"
+
+        # Offset reset policy (if consumer group is new)
+        offsetResetPolicy: latest  # or "earliest"
+
+        # Allow idle consumers (don't error if consumer group not yet created)
+        allowIdleConsumers: "true"
+
+        # Partition limitation (optional): only consider specific partitions
+        # partitionLimitation: "0,1,2,3,4,5"  # all 6 partitions
+
+      authenticationRef:
+        name: keda-kafka-auth
+
+    # Trigger 2: cce.rds.cart_events topic lag
+    - type: kafka
+      metadata:
+        bootstrapServers: ""
+        consumerGroup: cce-realtime-feature-stream
+        topic: cce.rds.cart_events
+        lagThreshold: "5000"
+        activationLagThreshold: "100"
+        offsetResetPolicy: latest
+        allowIdleConsumers: "true"
+      authenticationRef:
+        name: keda-kafka-auth
+
+---
+# Optional: ServiceMonitor for Prometheus (if using Prometheus Operator)
+# This allows Grafana dashboards to visualize KEDA scaling decisions
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: keda-operator-metrics
+  namespace: keda
+  labels:
+    app: keda-operator
+spec:
+  selector:
+    matchLabels:
+      app: keda-operator
+  endpoints:
+    - port: metrics
+      interval: 30s
+
+---
+# Alternative: Using Prometheus Query Instead of Kafka Direct
+# If you already have Kafka Exporter publishing to Prometheus,
+# you can use the prometheus scaler instead of kafka scaler.
+# This is more flexible for complex queries (e.g., rate of change).
+#
+# Uncomment below if using this approach:
+
+# apiVersion: keda.sh/v1alpha1
+# kind: ScaledObject
+# metadata:
+#   name: cce-realtime-stream-scaler-prometheus
+#   namespace: cce-platform
+# spec:
+#   scaleTargetRef:
+#     apiVersion: apps/v1
+#     kind: StatefulSet
+#     name: cce-realtime-feature-stream
+#   pollingInterval: 30
+#   cooldownPeriod: 300
+#   minReplicaCount: 2
+#   maxReplicaCount: 6
+#   triggers:
+#     - type: prometheus
+#       metadata:
+#         serverAddress: http://prometheus-server.monitoring.svc.cluster.local:9090
+#
+#         # Query: sum of lag across both topics, averaged per current pod
+#         # This example assumes kafka_consumergroup_lag metric from Kafka Exporter
+#         query: |
+#           sum(kafka_consumergroup_lag{
+#             consumergroup="cce-realtime-feature-stream",
+#             topic=~"cce.rds.orders|cce.rds.cart_events"
+#           }) /
+#           count(kube_pod_info{
+#             namespace="cce-platform",
+#             pod=~"cce-realtime-feature-stream-.*"
+#           })
+#
+#         threshold: "5000"  # Scale up if avg lag per pod > 5000
+#         activationThreshold: "100"
+
+---
+# Alternative: Using AWS CloudWatch (for EKS on AWS)
+# If using CloudWatch Container Insights instead of Prometheus
+#
+# Uncomment below if using this approach:
+
+# apiVersion: keda.sh/v1alpha1
+# kind: TriggerAuthentication
+# metadata:
+#   name: keda-aws-cloudwatch-auth
+#   namespace: cce-platform
+# spec:
+#   podIdentity:
+#     provider: aws-eks  # Use IRSA (IAM Roles for Service Accounts)
+
+# ---
+# apiVersion: keda.sh/v1alpha1
+# kind: ScaledObject
+# metadata:
+#   name: cce-realtime-stream-scaler-cloudwatch
+#   namespace: cce-platform
+# spec:
+#   scaleTargetRef:
+#     apiVersion: apps/v1
+#     kind: StatefulSet
+#     name: cce-realtime-feature-stream
+#   pollingInterval: 60  # CloudWatch has 1-minute resolution
+#   cooldownPeriod: 300
+#   minReplicaCount: 2
+#   maxReplicaCount: 6
+#   triggers:
+#     - type: aws-cloudwatch
+#       metadata:
+#         namespace: AWS/Kafka  # For MSK metrics
+#         dimensionName: Consumer Group
+#         dimensionValue: cce-realtime-feature-stream
+#         metricName: SumOffsetLag
+#         targetMetricValue: "10000"  # Total lag across all partitions
+#         minMetricValue: "0"
+#         awsRegion: ap-southeast-1
+#       authenticationRef:
+#         name: keda-aws-cloudwatch-auth
+
+---
+# Deployment Steps:
+#
+# 1. Install KEDA operator (if not already installed):
+#    kubectl apply -f https://github.com/kedacore/keda/releases/download/v2.14.0/keda-2.14.0.yaml
+#
+# 2. Verify KEDA is running:
+#    kubectl get pods -n keda
+#    # Expected: keda-operator and keda-metrics-apiserver pods running
+#
+# 3. Update keda-kafka-secrets with your MSK bootstrap servers:
+#    kubectl create secret generic keda-kafka-secrets \
+#      --from-literal=bootstrapServers="your-msk-bootstrap-servers" \
+#      -n cce-platform
+#
+# 4. Apply this configuration:
+#    kubectl apply -f ADR-005-keda-kafka-scaler.yaml
+#
+# 5. Verify ScaledObject is active:
+#    kubectl get scaledobject -n cce-platform
+#    kubectl describe scaledobject cce-realtime-stream-scaler -n cce-platform
+#
+# 6. Check HPA created by KEDA:
+#    kubectl get hpa -n cce-platform
+#    # Expected: keda-hpa-cce-realtime-stream-scaler
+#
+# 7. Monitor scaling events:
+#    kubectl get events -n cce-platform --field-selector involvedObject.name=cce-realtime-feature-stream --watch
+#
+# 8. View KEDA metrics (if using Prometheus):
+#    kubectl port-forward -n keda svc/keda-operator-metrics-apiserver 8080:8080
+#    curl http://localhost:8080/metrics | grep cce_realtime
+
+---
+# Troubleshooting:
+#
+# Problem: ScaledObject shows "Unknown" status
+# Solution: Check KEDA can connect to Kafka
+#   kubectl logs -n keda deployment/keda-operator | grep cce-realtime-stream-scaler
+#
+# Problem: Pods not scaling despite high lag
+# Solution: Verify lag threshold calculation
+#   # Get current lag from Kafka
+#   kafka-consumer-groups.sh --bootstrap-server $KAFKA_BOOTSTRAP \
+#     --describe --group cce-realtime-feature-stream
+#
+#   # Check KEDA's computed metric
+#   kubectl get --raw "/apis/external.metrics.k8s.io/v1beta1/namespaces/cce-platform/s0-kafka-cce-rds-orders" | jq .
+#
+# Problem: Scaling too aggressively (flapping)
+# Solution: Increase cooldownPeriod or stabilizationWindowSeconds
+#   cooldownPeriod: 600  # 10 minutes
+#
+# Problem: StatefulSet stuck during scale-down
+# Solution: Check RocksDB state volume is healthy
+#   kubectl exec -it cce-realtime-feature-stream-0 -n cce-platform -- df -h /var/lib/kafka-streams
+#   kubectl describe pvc rocksdb-state-cce-realtime-feature-stream-0 -n cce-platform
+
+---
+# Performance Tuning:
+#
+# 1. Partition count vs Max replicas:
+#    - Each Kafka consumer (pod) handles ≥1 partition
+#    - maxReplicaCount should not exceed partition count
+#    - If need more than 6 pods, increase Kafka partitions first:
+#      kafka-topics.sh --bootstrap-server $KAFKA_BOOTSTRAP \
+#        --alter --topic cce.rds.orders --partitions 12
+#
+# 2. Lag threshold calculation:
+#    lagThreshold = single_pod_throughput × desired_recovery_time
+#
+#    Example:
+#    - Single pod processes 100 events/sec
+#    - Want to recover from lag in 60 seconds
+#    - lagThreshold = 100 × 60 = 6000
+#
+# 3. Scale-up speed vs stability:
+#    - Faster scale-up: decrease pollingInterval, increase scaleUp.value
+#    - More stability: increase cooldownPeriod, decrease scaleUp.value
+#
+# 4. Cost optimization:
+#    - Set minReplicaCount to 1 if tolerate brief unavailability
+#    - Set activationLagThreshold high to scale to min during idle
+#    - Use spot instances for StatefulSet (with careful pod disruption budget)
+
+---
+# Monitoring Queries (Prometheus/Grafana):
+#
+# 1. Current consumer lag per topic:
+#    kafka_consumergroup_lag{consumergroup="cce-realtime-feature-stream"}
+#
+# 2. Lag per pod (if scaled):
+#    sum(kafka_consumergroup_lag{consumergroup="cce-realtime-feature-stream"})
+#    / count(kube_pod_info{namespace="cce-platform", pod=~"cce-realtime-feature-stream-.*"})
+#
+# 3. Scaling events:
+#    keda_scaler_active{scaledObject="cce-realtime-stream-scaler"}
+#
+# 4. Time to process lag:
+#    kafka_consumergroup_lag / rate(kafka_topic_partition_current_offset[5m])
+#
+# 5. RocksDB state size growth:
+#    sum(container_fs_usage_bytes{namespace="cce-platform", pod=~"cce-realtime-feature-stream-.*", mountpoint="/var/lib/kafka-streams"})
+
+---
+# Migration from Phase 1 to Phase 2 Checklist:
+#
+# Before cutover:
+# - [ ] Test in staging: generate artificial lag, verify scaling behavior
+# - [ ] Measure RocksDB state redistribution time (should be <5min per partition)
+# - [ ] Set CloudWatch alarms for KEDA operator health
+# - [ ] Document rollback procedure (delete ScaledObject → replicas revert to StatefulSet spec)
+#
+# During cutover:
+# - [ ] Apply KEDA configuration during low-traffic window
+# - [ ] Watch for 1 hour: kubectl get hpa -n cce-platform --watch
+# - [ ] Verify no unexpected scale-ups/downs
+#
+# After cutover:
+# - [ ] Update on-call runbook: remove manual scaling steps
+# - [ ] Set up Grafana dashboard with lag, pod count, and scaling events
+# - [ ] Review cost: compare fixed 2 pods vs auto-scaled average over 1 month

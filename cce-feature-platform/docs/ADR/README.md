@@ -18,6 +18,7 @@ Each ADR follows this structure:
 | [ADR-002](ADR-002-cart-in-olap.md) | cart_zset in OLAP instead of OLTP | Accepted | 2026-08-27 |
 | [ADR-003](ADR-003-no-layer-3.md) | Why no Layer 3 | Accepted | 2026-08-27 |
 | [ADR-004](ADR-004-no-reexports-olap.md) | No re-exports in L2_olap/__init__.py | Accepted | 2026-08-27 |
+| [ADR-005](ADR-005-two-phase-autoscaling-strategy.md) | Two-Phase Autoscaling Strategy for Stream Processing | Accepted | 2026-09-03 |
 
 ## Conventions
 

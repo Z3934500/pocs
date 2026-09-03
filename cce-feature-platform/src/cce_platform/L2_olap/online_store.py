@@ -165,3 +165,65 @@ def make_online_store(
         redis_url=redis_url,
     )
     return store
+
+
+def get_online_store(redis_url: str | None = None) -> LocalOnlineStore | RedisOnlineStore:
+    """
+    Get online store instance for production stream job.
+
+    This is a convenience wrapper around make_online_store() that:
+    - Defaults to Redis in production (from env var or argument)
+    - Falls back to local JSON store for development
+    - Exposes redis_client for advanced operations (deduplication, metrics)
+
+    Args:
+        redis_url: Redis connection URL (e.g., "redis://localhost:6379")
+                   If None, reads from environment or uses local store
+
+    Returns:
+        Online store instance (RedisOnlineStore or LocalOnlineStore)
+
+    Example:
+        >>> store = get_online_store("redis://localhost:6379")
+        >>> store.redis_client.ping()  # For RedisOnlineStore
+        True
+    """
+    import os
+
+    # Priority: argument > environment > local
+    if redis_url is None:
+        redis_url = os.environ.get('REDIS_URL')
+
+    store = make_online_store(redis_url=redis_url)
+
+    # Attach redis_client for convenience (used by stream job for deduplication)
+    if isinstance(store, RedisOnlineStore):
+        store.redis_client = store._client
+    else:
+        # For LocalOnlineStore, create a mock redis_client for compatibility
+        logger.warning(
+            "Using LocalOnlineStore (JSON file). "
+            "Idempotency and metrics will not persist across restarts."
+        )
+        # Create a minimal mock that supports basic operations
+        class MockRedisClient:
+            def __init__(self):
+                self._sets = {}
+
+            def sismember(self, key, value):
+                return value in self._sets.get(key, set())
+
+            def sadd(self, key, *values):
+                if key not in self._sets:
+                    self._sets[key] = set()
+                self._sets[key].update(values)
+
+            def expire(self, key, seconds):
+                pass  # No-op for local store
+
+            def ping(self):
+                return True
+
+        store.redis_client = MockRedisClient()
+
+    return store

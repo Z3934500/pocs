@@ -1,0 +1,523 @@
+# Phase 1 Monitoring Configuration
+#
+# This configuration provides observability for the stream processing
+# workload BEFORE implementing Kafka lag-based autoscaling.
+#
+# Purpose:
+# - Monitor consumer lag to know when manual scaling is needed
+# - Collect baseline metrics for Phase 2 capacity planning
+# - Alert on-call when intervention is required
+#
+# Prerequisites:
+# - CloudWatch Container Insights enabled on EKS cluster, OR
+# - Prometheus + Kafka Exporter deployed
+#
+# Related: ADR-005 Two-Phase Autoscaling Strategy
+
+---
+# Option A: CloudWatch Alarms (AWS Native)
+# Use this if you're on EKS and prefer AWS-native monitoring
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cloudwatch-alarm-config
+  namespace: cce-platform
+data:
+  # These are example CloudWatch alarm definitions
+  # Deploy via AWS CLI or CloudFormation/Terraform
+
+  alarms.json: |
+    {
+      "alarms": [
+        {
+          "AlarmName": "CCE-Stream-HighConsumerLag-Orders",
+          "AlarmDescription": "Consumer lag on cce.rds.orders > 10000 for 5 minutes",
+          "MetricName": "EstimatedMaxTimeLag",
+          "Namespace": "AWS/Kafka",
+          "Dimensions": [
+            {"Name": "Cluster Name", "Value": "msk-cce-platform"},
+            {"Name": "Consumer Group", "Value": "cce-realtime-feature-stream"},
+            {"Name": "Topic", "Value": "cce.rds.orders"}
+          ],
+          "Statistic": "Average",
+          "Period": 300,
+          "EvaluationPeriods": 1,
+          "Threshold": 10000,
+          "ComparisonOperator": "GreaterThanThreshold",
+          "TreatMissingData": "notBreaching",
+          "ActionsEnabled": true,
+          "AlarmActions": ["arn:aws:sns:ap-southeast-1:ACCOUNT_ID:oncall-alerts"]
+        },
+        {
+          "AlarmName": "CCE-Stream-HighConsumerLag-CartEvents",
+          "AlarmDescription": "Consumer lag on cce.rds.cart_events > 10000 for 5 minutes",
+          "MetricName": "EstimatedMaxTimeLag",
+          "Namespace": "AWS/Kafka",
+          "Dimensions": [
+            {"Name": "Cluster Name", "Value": "msk-cce-platform"},
+            {"Name": "Consumer Group", "Value": "cce-realtime-feature-stream"},
+            {"Name": "Topic", "Value": "cce.rds.cart_events"}
+          ],
+          "Statistic": "Average",
+          "Period": 300,
+          "EvaluationPeriods": 1,
+          "Threshold": 10000,
+          "ComparisonOperator": "GreaterThanThreshold",
+          "TreatMissingData": "notBreaching",
+          "ActionsEnabled": true,
+          "AlarmActions": ["arn:aws:sns:ap-southeast-1:ACCOUNT_ID:oncall-alerts"]
+        },
+        {
+          "AlarmName": "CCE-Stream-PodCPUHigh",
+          "AlarmDescription": "Stream job CPU > 80% for 10 minutes (may need scaling)",
+          "MetricName": "pod_cpu_utilization",
+          "Namespace": "ContainerInsights",
+          "Dimensions": [
+            {"Name": "PodName", "Value": "cce-realtime-feature-stream-*"},
+            {"Name": "Namespace", "Value": "cce-platform"}
+          ],
+          "Statistic": "Average",
+          "Period": 600,
+          "EvaluationPeriods": 1,
+          "Threshold": 80,
+          "ComparisonOperator": "GreaterThanThreshold",
+          "TreatMissingData": "notBreaching",
+          "ActionsEnabled": true,
+          "AlarmActions": ["arn:aws:sns:ap-southeast-1:ACCOUNT_ID:oncall-alerts"]
+        },
+        {
+          "AlarmName": "CCE-Stream-RocksDBDiskUsageHigh",
+          "AlarmDescription": "RocksDB state volume > 80% full",
+          "MetricName": "pod_volume_utilization",
+          "Namespace": "ContainerInsights",
+          "Dimensions": [
+            {"Name": "PodName", "Value": "cce-realtime-feature-stream-*"},
+            {"Name": "Namespace", "Value": "cce-platform"},
+            {"Name": "VolumeName", "Value": "rocksdb-state"}
+          ],
+          "Statistic": "Average",
+          "Period": 300,
+          "EvaluationPeriods": 1,
+          "Threshold": 80,
+          "ComparisonOperator": "GreaterThanThreshold",
+          "TreatMissingData": "notBreaching",
+          "ActionsEnabled": true,
+          "AlarmActions": ["arn:aws:sns:ap-southeast-1:ACCOUNT_ID:oncall-alerts"]
+        }
+      ]
+    }
+
+  # Deploy alarms with AWS CLI:
+  deploy.sh: |
+    #!/bin/bash
+    for alarm in $(cat alarms.json | jq -c '.alarms[]'); do
+      aws cloudwatch put-metric-alarm \
+        --region ap-southeast-1 \
+        --cli-input-json "$alarm"
+    done
+
+---
+# Option B: Prometheus + Kafka Exporter
+# Use this if you have existing Prometheus infrastructure
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kafka-exporter
+  namespace: monitoring
+  labels:
+    app: kafka-exporter
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kafka-exporter
+  template:
+    metadata:
+      labels:
+        app: kafka-exporter
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9308"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+        - name: kafka-exporter
+          image: danielqsj/kafka-exporter:v1.7.0
+          args:
+            - --kafka.server=b-1.msk-cluster.abc123.kafka.ap-southeast-1.amazonaws.com:9092
+            - --kafka.server=b-2.msk-cluster.abc123.kafka.ap-southeast-1.amazonaws.com:9092
+            - --kafka.server=b-3.msk-cluster.abc123.kafka.ap-southeast-1.amazonaws.com:9092
+            - --topic.filter=cce\.rds\..*
+            - --group.filter=cce-.*
+          ports:
+            - containerPort: 9308
+              name: metrics
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka-exporter
+  namespace: monitoring
+  labels:
+    app: kafka-exporter
+spec:
+  selector:
+    app: kafka-exporter
+  ports:
+    - name: metrics
+      port: 9308
+      targetPort: 9308
+
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: kafka-exporter
+  namespace: monitoring
+  labels:
+    app: kafka-exporter
+spec:
+  selector:
+    matchLabels:
+      app: kafka-exporter
+  endpoints:
+    - port: metrics
+      interval: 30s
+
+---
+# Prometheus Alert Rules
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: cce-stream-alerts
+  namespace: monitoring
+  labels:
+    prometheus: kube-prometheus
+spec:
+  groups:
+    - name: cce-stream-job
+      interval: 30s
+      rules:
+        # Alert 1: High consumer lag
+        - alert: CCEStreamHighConsumerLag
+          expr: |
+            sum by (consumergroup, topic) (
+              kafka_consumergroup_lag{
+                consumergroup="cce-realtime-feature-stream",
+                topic=~"cce.rds.orders|cce.rds.cart_events"
+              }
+            ) > 10000
+          for: 5m
+          labels:
+            severity: warning
+            component: stream-job
+          annotations:
+            summary: "High consumer lag on {{ $labels.topic }}"
+            description: |
+              Consumer group {{ $labels.consumergroup }} has {{ $value }} lag on topic {{ $labels.topic }}.
+              This may indicate the stream job needs manual scaling.
+
+              Action: kubectl scale statefulset cce-realtime-feature-stream --replicas=4 -n cce-platform
+            runbook_url: https://wiki.company.com/cce/runbooks/stream-scaling
+
+        # Alert 2: Very high consumer lag (critical)
+        - alert: CCEStreamCriticalConsumerLag
+          expr: |
+            sum by (consumergroup, topic) (
+              kafka_consumergroup_lag{
+                consumergroup="cce-realtime-feature-stream",
+                topic=~"cce.rds.orders|cce.rds.cart_events"
+              }
+            ) > 50000
+          for: 10m
+          labels:
+            severity: critical
+            component: stream-job
+          annotations:
+            summary: "CRITICAL: Consumer lag {{ $labels.topic }} > 50K"
+            description: |
+              Consumer lag has reached {{ $value }}, indicating serious backlog.
+              Immediate scaling required.
+
+              Action:
+              1. Scale to max: kubectl scale statefulset cce-realtime-feature-stream --replicas=6 -n cce-platform
+              2. Check for stuck processing: kubectl logs -n cce-platform cce-realtime-feature-stream-0 --tail=100
+              3. Consider Phase 2 (KEDA) transition if this becomes frequent
+
+        # Alert 3: Stream job pod down
+        - alert: CCEStreamJobPodDown
+          expr: |
+            kube_statefulset_status_replicas_ready{
+              namespace="cce-platform",
+              statefulset="cce-realtime-feature-stream"
+            } < 2
+          for: 5m
+          labels:
+            severity: critical
+            component: stream-job
+          annotations:
+            summary: "Stream job has fewer than 2 ready pods"
+            description: |
+              Expected 2 replicas, only {{ $value }} are ready.
+              Real-time features may be stale.
+
+              Check: kubectl get pods -n cce-platform -l app=cce-realtime-feature-stream
+
+        # Alert 4: RocksDB state volume filling up
+        - alert: CCEStreamRocksDBDiskFull
+          expr: |
+            (
+              kubelet_volume_stats_used_bytes{
+                namespace="cce-platform",
+                persistentvolumeclaim=~"rocksdb-state-cce-realtime-feature-stream-.*"
+              }
+              /
+              kubelet_volume_stats_capacity_bytes{
+                namespace="cce-platform",
+                persistentvolumeclaim=~"rocksdb-state-cce-realtime-feature-stream-.*"
+              }
+            ) * 100 > 80
+          for: 10m
+          labels:
+            severity: warning
+            component: stream-job
+          annotations:
+            summary: "RocksDB state volume {{ $labels.persistentvolumeclaim }} is {{ $value }}% full"
+            description: |
+              The RocksDB state volume is filling up. This may cause the stream job to fail.
+
+              Actions:
+              1. Check state compaction: kubectl exec -it {{ $labels.pod }} -n cce-platform -- du -sh /var/lib/kafka-streams/*
+              2. Consider increasing PVC size (requires pod restart)
+              3. Investigate state growth rate (should be bounded by retention)
+
+        # Alert 5: Stream job high CPU
+        - alert: CCEStreamJobHighCPU
+          expr: |
+            sum by (pod) (
+              rate(container_cpu_usage_seconds_total{
+                namespace="cce-platform",
+                pod=~"cce-realtime-feature-stream-.*"
+              }[5m])
+            ) > 1.6  # 80% of 2 CPU limit
+          for: 10m
+          labels:
+            severity: warning
+            component: stream-job
+          annotations:
+            summary: "Stream job pod {{ $labels.pod }} CPU > 80%"
+            description: |
+              Pod {{ $labels.pod }} is using {{ $value }} CPU (80% of limit).
+              This may indicate high throughput or inefficient processing.
+
+              Check:
+              1. Current consumer lag (may need scaling)
+              2. GC activity: kubectl exec -it {{ $labels.pod }} -n cce-platform -- jstat -gc 1
+              3. Consider increasing CPU limit or scaling replicas
+
+---
+# Grafana Dashboard (Prometheus Data Source)
+# Import this JSON into Grafana for visualization
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cce-stream-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  cce-stream-monitoring.json: |
+    {
+      "dashboard": {
+        "title": "CCE Stream Processing - Phase 1",
+        "panels": [
+          {
+            "title": "Consumer Lag by Topic",
+            "targets": [
+              {
+                "expr": "sum by (topic) (kafka_consumergroup_lag{consumergroup=\"cce-realtime-feature-stream\"})",
+                "legendFormat": "{{ topic }}"
+              }
+            ],
+            "type": "graph"
+          },
+          {
+            "title": "Stream Job Pod Count",
+            "targets": [
+              {
+                "expr": "kube_statefulset_status_replicas_ready{namespace=\"cce-platform\", statefulset=\"cce-realtime-feature-stream\"}",
+                "legendFormat": "Ready Pods"
+              }
+            ],
+            "type": "stat"
+          },
+          {
+            "title": "Processing Rate (events/sec)",
+            "targets": [
+              {
+                "expr": "sum(rate(kafka_topic_partition_current_offset{topic=~\"cce.rds.orders|cce.rds.cart_events\"}[5m]))",
+                "legendFormat": "Ingestion Rate"
+              },
+              {
+                "expr": "sum(rate(kafka_consumergroup_current_offset{consumergroup=\"cce-realtime-feature-stream\"}[5m]))",
+                "legendFormat": "Consumption Rate"
+              }
+            ],
+            "type": "graph"
+          },
+          {
+            "title": "RocksDB State Size (GB)",
+            "targets": [
+              {
+                "expr": "sum by (pod) (kubelet_volume_stats_used_bytes{namespace=\"cce-platform\", persistentvolumeclaim=~\"rocksdb-state-.*\"}) / 1024 / 1024 / 1024",
+                "legendFormat": "{{ pod }}"
+              }
+            ],
+            "type": "graph"
+          },
+          {
+            "title": "Stream Job CPU Usage",
+            "targets": [
+              {
+                "expr": "sum by (pod) (rate(container_cpu_usage_seconds_total{namespace=\"cce-platform\", pod=~\"cce-realtime-feature-stream-.*\"}[5m]))",
+                "legendFormat": "{{ pod }}"
+              }
+            ],
+            "type": "graph"
+          },
+          {
+            "title": "Stream Job Memory Usage (MB)",
+            "targets": [
+              {
+                "expr": "sum by (pod) (container_memory_working_set_bytes{namespace=\"cce-platform\", pod=~\"cce-realtime-feature-stream-.*\"}) / 1024 / 1024",
+                "legendFormat": "{{ pod }}"
+              }
+            ],
+            "type": "graph"
+          }
+        ]
+      }
+    }
+
+---
+# Manual Scaling Runbook
+# Keep this in your wiki/documentation
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: stream-scaling-runbook
+  namespace: cce-platform
+data:
+  RUNBOOK.md: |
+    # Stream Job Manual Scaling Runbook (Phase 1)
+
+    ## When to Scale Up
+
+    Trigger: CloudWatch/Prometheus alert "CCEStreamHighConsumerLag"
+
+    ### Step 1: Verify the lag
+    ```bash
+    # Check consumer lag via Kafka
+    kafka-consumer-groups.sh \
+      --bootstrap-server $KAFKA_BOOTSTRAP \
+      --describe \
+      --group cce-realtime-feature-stream
+
+    # Or via kubectl + Prometheus
+    kubectl port-forward -n monitoring svc/prometheus 9090:9090
+    # Open http://localhost:9090 and query:
+    # kafka_consumergroup_lag{consumergroup="cce-realtime-feature-stream"}
+    ```
+
+    ### Step 2: Check current pod count and health
+    ```bash
+    kubectl get statefulset cce-realtime-feature-stream -n cce-platform
+    kubectl get pods -n cce-platform -l app=cce-realtime-feature-stream
+
+    # Check logs for errors
+    kubectl logs -n cce-platform cce-realtime-feature-stream-0 --tail=50
+    ```
+
+    ### Step 3: Scale up
+    ```bash
+    # Scale to 4 pods (from 2)
+    kubectl scale statefulset cce-realtime-feature-stream --replicas=4 -n cce-platform
+
+    # Watch rollout
+    kubectl get pods -n cce-platform -l app=cce-realtime-feature-stream --watch
+    ```
+
+    ### Step 4: Verify lag is decreasing
+    Wait 10 minutes, then check lag again:
+    ```bash
+    # Lag should be decreasing
+    kafka-consumer-groups.sh \
+      --bootstrap-server $KAFKA_BOOTSTRAP \
+      --describe \
+      --group cce-realtime-feature-stream
+    ```
+
+    ### Step 5: Record the incident
+    ```bash
+    # Log to incident tracker:
+    # - Timestamp
+    # - Peak lag value
+    # - Scaled from X to Y replicas
+    # - Time to recover
+    # - Root cause (if known)
+    ```
+
+    ## When to Scale Down
+
+    After lag has been below 1000 for 1 hour during off-peak:
+
+    ```bash
+    # Scale back to 2 pods
+    kubectl scale statefulset cce-realtime-feature-stream --replicas=2 -n cce-platform
+
+    # Monitor for 30 minutes to ensure lag stays low
+    ```
+
+    ## Escalation Path
+
+    If lag continues to grow after scaling to 6 pods:
+    1. Check for processing errors in logs
+    2. Check Kafka broker health (MSK CloudWatch metrics)
+    3. Check Redis health (ElastiCache metrics)
+    4. Consider emergency Kafka partition increase (requires coordination)
+    5. Page platform architect to discuss Phase 2 (KEDA) emergency rollout
+
+---
+# Deployment Instructions
+
+# For CloudWatch (Option A):
+# 1. Create SNS topic for alerts:
+#    aws sns create-topic --name oncall-alerts --region ap-southeast-1
+#    aws sns subscribe --topic-arn <arn> --protocol email --notification-endpoint oncall@company.com
+#
+# 2. Deploy alarms:
+#    kubectl apply -f ADR-005-phase1-monitoring.yaml
+#    # Extract deploy.sh script and run it
+
+# For Prometheus (Option B):
+# 1. Install Prometheus Operator (if not already):
+#    kubectl apply -f https://raw.githubusercontent.com/prometheus-operator/prometheus-operator/main/bundle.yaml
+#
+# 2. Deploy Kafka Exporter and alerts:
+#    kubectl apply -f ADR-005-phase1-monitoring.yaml
+#
+# 3. Import Grafana dashboard:
+#    kubectl get configmap cce-stream-dashboard -n monitoring -o jsonpath='{.data.cce-stream-monitoring\.json}' > dashboard.json
+#    # Import dashboard.json via Grafana UI

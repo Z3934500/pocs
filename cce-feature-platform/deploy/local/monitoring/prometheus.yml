@@ -1,0 +1,28 @@
+# Prometheus configuration for scraping Stream Job metrics
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # Stream Job metrics
+  - job_name: 'cce-stream-job'
+    static_configs:
+      - targets: ['host.docker.internal:9404']
+        labels:
+          environment: 'local'
+          service: 'stream-job'
+
+  # Kafka exporter (if deployed)
+  - job_name: 'kafka-exporter'
+    static_configs:
+      - targets: ['kafka-exporter:9308']
+        labels:
+          environment: 'local'
+
+  # Redis exporter (if deployed)
+  - job_name: 'redis-exporter'
+    static_configs:
+      - targets: ['redis-exporter:9121']
+        labels:
+          environment: 'local'
